@@ -43,16 +43,23 @@ namespace CncPreviewHandler.Shell
 
                 try
                 {
-                    // Handle OneDrive cloud-only files
+                    // Detect OneDrive / cloud-only files
                     try
                     {
                         var attr = File.GetAttributes(filePath);
-                        if ((attr & FileAttributes.ReparsePoint) != 0 ||
-                            (attr & FileAttributes.Offline) != 0)
+                        bool isCloud = (attr & FileAttributes.ReparsePoint) != 0 ||
+                                       (attr & FileAttributes.Offline) != 0;
+                        if (isCloud)
                         {
-                            SafeInvoke(() => _lbl.Text = "Downloading from OneDrive\u2026");
-                            // Touch the file to trigger hydration
-                            using (File.OpenRead(filePath)) { }
+                            SafeInvoke(() =>
+                            {
+                                _lbl.ForeColor = Color.FromArgb(255, 200, 0);
+                                _lbl.Text =
+                                    "File is OneDrive cloud-only\u2014not accessible from the preview pane.\r\n\r\n" +
+                                    "Fix: right-click the file in Explorer\r\n" +
+                                    "and select \u201cAlways keep on this device\u201d.";
+                            });
+                            return;
                         }
                     }
                     catch { }
@@ -208,3 +215,4 @@ namespace CncPreviewHandler.Shell
           base.Dispose(d); }
     }
 }
+
