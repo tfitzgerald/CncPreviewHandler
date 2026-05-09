@@ -1,283 +1,226 @@
-# ChromaSound
+# CNC Preview Handler
 
-**Real-Time Audio Frequency Visualiser for Android**
+A Windows Explorer preview pane extension that renders **interactive 3D toolpath visualizations** for CNC and 3D printer files — directly in the Explorer preview pane, no separate application needed.
 
-> Version 2.8.0 · Build 17 · ThinkingThane / FunAndGames · Pickering, Ontario, Canada
-
-ChromaSound captures microphone audio, processes it through a custom pure-Kotlin FFT, and renders animated coloured visual objects on screen — one per frequency band — with beat detection, haptic feedback, and extensive visual customisation. Completely ad-free, zero data collection, Google Drive backed-up.
-
----
-
-## At a Glance
-
-| Property | Detail |
-|---|---|
-| Language | Kotlin + Jetpack Compose (Material 3) |
-| Architecture | MVVM — AndroidViewModel + StateFlow + SharedPreferences |
-| Audio engine | AudioRecord, UNPROCESSED source, 44,100 Hz |
-| FFT | Pure Kotlin Cooley-Tukey radix-2, 4,096-sample frames (~93ms) |
-| Frequency range | 30 Hz – 11,000 Hz across 2–24 log-spaced bands |
-| Shape types | 10 (Circle, Star, Box 2D, Box 3D, Sphere, Koch, Sierpinski, Dragon, Vector, Ribbon) |
-| Background effects | 6 (None, Starfield, Bloom, Noise, Julia, Terrain) |
-| Source files | 14 Kotlin files, ~4,500 lines |
-| Min SDK | API 26 (Android 8.0) |
-| Target SDK | 34 |
-| Data collection | **None** — zero analytics, zero tracking |
-| Ads | **None** — always ad-free |
+![Build](https://github.com/ThinkingThane/CncPreviewHandler/actions/workflows/build.yml/badge.svg)
 
 ---
 
 ## Features
 
-### Audio Processing
-
-- **Real-time FFT** — 4,096-sample Hann-windowed frames at ~10fps audio-driven updates
-- **Frequency bands** — 2–24 log-spaced bands from 30 Hz to 11 kHz, configurable
-- **Auto-Gain Control (AGC)** — asymmetric attack/release normalises quiet and loud input automatically; manual sensitivity still works on top
-- **Noise gate** — –70 to –20 dBFS spawn threshold keeps silence clean
-- **Beat detection** — rolling RMS history, configurable sensitivity 1.1×–2.5×, minimum 250ms gap
-- **BPM display** — median of last 8 beat intervals, 20–240 BPM range, preserved between frames
-- **Sub-band shading** — 1–12 log-spaced frequency slices per band drive radial gradient shading on each shape
-- **Waveform overlay** — 256-point PCM downsample rendered as a glowing full-screen line
+- **Interactive 3D viewport** — orbit, pan, and zoom with the mouse
+- **Colour-coded toolpaths** — rapid moves (blue), cutting moves (orange), arc moves (green)
+- **Broad dialect support** — handles 3D printer gcode (ElegooSlicer, PrusaSlicer, Cura, Bambu Studio) and CNC mill/router files (Fanuc, Haas, Carveco, Fusion 360)
+- **Large file support** — files with hundreds of thousands of lines are automatically decimated for fast rendering
+- **Pure WinForms renderer** — no external 3D engine dependencies, works reliably in all Windows configurations
+- **Automatic build** — every push to `main` builds and publishes via GitHub Actions
 
 ---
 
-### Shape Types
+## Supported File Types
 
-Selected in **Settings → VISUAL → OBJECT SHAPE**. All shapes use the same frequency colour, dB-driven size, and lifetime system.
-
-| Icon | Shape | Description |
-|---|---|---|
-| ● | Circle | Radial gradient glow disc with sub-band shading rings |
-| ★ | Star | 5-point star path with sub-band gradient fill |
-| ■ | Box 2D | Flat rectangle with linear gradient |
-| ⬡ | Box 3D | 6-face 3D projection, rotates continuously |
-| ◉ | Sphere | Disc with latitude and longitude arc lines, rotates continuously |
-| ❄ | Koch | Koch snowflake — depth 1–4 driven by dB level |
-| △ | Sierpinski | Sierpinski triangle — recursive depth 1–4 driven by dB level |
-| ∾ | Dragon | Heighway dragon curve — iterations 6–12 driven by dB level |
-| → | Vector | Spinning arrow per band — length=dB, rotates around midpoint, 15s lifetime with 3s fade, new vector every 1s |
-| ∿ | Ribbon | Flowing silk ribbon wave — amplitude=dB, undulation rate=frequency band, tapered pointed tips, drifts slowly outward |
+| Extension | Description |
+|-----------|-------------|
+| `.nc`     | Generic CNC / Fanuc / Haas |
+| `.gcode`  | 3D printer gcode (GRBL, Marlin, Klipper) |
+| `.gc` `.g`| Short gcode variants |
+| `.tap`    | Fanuc / Haas tape format |
+| `.cnc`    | Generic CNC variant |
 
 ---
 
-### Background Effects
+## Requirements
 
-| Icon | Effect | Description |
-|---|---|---|
-| ■ | None | Solid near-black (#050508) — maximum contrast for shapes |
-| ✦ | Starfield | 120 drifting stars with glow halos (3–8px), speed increases on beats |
-| ◉ | Bloom | Purple radial gradient pulsing with RMS volume — always-on base glow plus reactive centre burst |
-| ▦ | Noise | Two-layer animated chromatic grain — 80 slow blobs plus 300 fine fast dots |
-| ∞ | Julia | Julia set fractal rendered at 100×178px — complex seed `c` driven by dominant frequency (cx) and RMS volume (cy). Morphs in real time with the audio |
-| ⛰ | Terrain | 3D perspective frequency landscape — 30-row ring buffer scrolls toward viewer. X=frequency band, Y=dB height, coloured by frequency. Painter's algorithm (back-to-front) |
+- Windows 10 or Windows 11 (64-bit)
+- .NET Framework 4.8 (pre-installed on Windows 10 1903+ and Windows 11)
 
 ---
 
-### Visual Effects
+## Installation
 
-- **Mirror modes** — Off, Horizontal, Vertical, Quad (4-fold symmetry)
-- **Shape trails** — 0–8 ghost frames of previous positions, fading with age
-- **Beat pulse** — spring animation to 1.4× scale and back on each detected beat
-- **Colour animation** — continuous hue drift at 0–3× speed
-- **Shape opacity** — global transparency 20–100%; lower values create atmospheric layered depth
-- **Oscilloscope ring mode** — shapes draw as hollow pulsing rings whose radius contracts and expands with sub-band energy
-- **Particle explosions** — 8-particle bursts on loud transients, 0.92× drag physics, 200-particle cap
-- **Peak frequency label** — Hz or kHz value floats above the loudest active shape, colour-matched, fades with shape lifetime
-- **Haptic feedback** — 40ms VibrationEffect on each beat
-- **Dark / Light / System theme** — canvas always stays dark (BlendMode.Screen requires it); theme applies to UI chrome only
+### Quick install
 
----
+1. Go to the [Releases](../../releases) page and download the latest `CncPreviewHandler-vX.X.X-x64.zip`
+2. Extract the zip to a **permanent folder** (e.g. `C:\Program Files\CncPreviewHandler`)
+3. Right-click `install.ps1` → **Run with PowerShell**
+   - If prompted about execution policy, click **Open** or run this first:
+     ```powershell
+     Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+     ```
+4. Explorer restarts automatically — no reboot needed
 
-### Presets & Sharing
+### Enable the Preview Pane
 
-- Save up to **10 named presets** to SharedPreferences
-- **5 built-in themes** — Neon Noir, Solar Flare, Arctic, Deep Ocean, Classic
-- **Preset share codes** — `CS:...` Base64-encoded codes, share via any messaging app, import by pasting
-- **Google Drive Auto Backup** — presets and settings survive reinstall and phone migration
+If the preview pane isn't visible in Explorer:
+- Press **Alt + P**, or
+- Click **View → Preview Pane** in the Explorer toolbar
 
----
+### Verify installation
 
-## Settings Reference
-
-### 🎵 Frequency & Timing
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| Frequency Bands | 16 | 2–24 | Number of log-spaced bands from 30 Hz to 11 kHz |
-| Shape Lifetime | 500 ms | 100–2000 ms | How long each shape lives before fading |
-| Shapes Per Band | 1 | 1–5 | Concurrent shapes occupying each band slot |
-
-### 📐 Size & Position
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| Min Size | 10 px | 5–120 px | Minimum shape radius (at noise gate level) |
-| Max Size | 160 px | 20–250 px | Maximum shape radius (at 0 dBFS) |
-| Placement | 0.3 | 0–1 | 0 = strict grid columns, 1 = fully random position |
-
-### 🎙️ Audio
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| Auto-Gain Control | On | On / Off | Automatically normalises quiet and loud input levels |
-| Mic Sensitivity | 1.0× | 0.1–3.0× | Manual gain multiplier applied on top of AGC |
-| Noise Gate | –50 dBFS | –70 to –20 | Threshold below which no shapes spawn |
-
-### 🎨 Visual
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| Shape Opacity | 100% | 20–100% | Global transparency of all shapes |
-| Sub-Band Shading | 4 rings | 1–12 | Radial gradient rings per shape driven by sub-band energy |
-| Colour Scheme | Rainbow | Rainbow / Inverse | Bass→red→violet or violet→red→bass |
-| Object Shape | Circle | 10 types | See Shape Types section |
-| Band Colours | — | Per-band HSV | Override any individual band with a custom colour |
-| Display Theme | Dark | Dark/Light/System | Canvas always dark; theme applies to UI chrome |
-
-### ✨ Effects
-
-| Setting | Default | Range | Description |
-|---|---|---|---|
-| Mirror Mode | Off | Off/H/V/Quad | Reflects shapes horizontally, vertically, or in all 4 quadrants |
-| Shape Trails | 0 | 0–8 | Ghost frames of previous shape positions |
-| Beat Sensitivity | 1.3× | 1.1–2.5× | RMS multiplier threshold for beat detection |
-| Colour Animation | 0 | 0–3× | Speed of continuous hue drift |
-| Waveform Overlay | Off | On/Off | Full-screen PCM waveform line |
-| Oscilloscope Mode | Off | On/Off | Shapes become hollow pulsing rings |
-| Particles | Off | On/Off | Burst of 8 particles on loud transients |
-| Particle Threshold | 0.6 | 0.1–1.0 | RMS level that triggers particle bursts |
-| Background Effect | None | 6 types | See Background Effects section |
+Navigate to a folder containing a `.nc` or `.gcode` file, click the file, and the 3D toolpath should appear in the preview pane within a second or two.
 
 ---
 
-## Architecture
+## Controls
 
-### Audio Pipeline
-
-Each audio frame flows through these steps at ~93ms intervals:
-
-1. Read 4,096 PCM float samples from `AudioRecord` (UNPROCESSED source, READ_BLOCKING)
-2. Compute RMS = `sqrt(sum(s²) / N)`, coerced to [0, 1]
-3. Apply Hann window to reduce spectral leakage
-4. Run Cooley-Tukey FFT → 2,048 normalised magnitude bins
-5. Auto-Gain Control or manual sensitivity gain applied to dBFS levels
-6. Find peak bin per band above noise gate threshold
-7. Compute sub-band energies — N log-spaced slices per band, normalised to peak
-8. Beat detection — `avgRms` computed **before** adding current frame to history (critical ordering)
-9. BPM calculation — median of last 8 beat intervals, coerced 20–240
-10. Emit `AudioFrame` via Kotlin Flow on `Dispatchers.IO`
-
-### Source Files
-
-| File | Purpose |
-|---|---|
-| `ChromaSoundScreen.kt` | Root composable, all navigation, VisualizerCanvas, all shape/effect drawing (~1,891 lines) |
-| `SettingsScreen.kt` | Settings hub + 5 sub-screens (~1,000 lines) |
-| `PresetsScreen.kt` | NamedPreset, save/load/share/paste codes, built-in themes (~788 lines) |
-| `ChromaSoundViewModel.kt` | AndroidViewModel, StateFlows, shape spawning, persistence, haptics |
-| `AudioCaptureEngine.kt` | AudioRecord loop, FFT, AGC, beat detection, BPM, waveform |
-| `Models.kt` | All enums + data classes (Settings, FrequencyCircle, AudioFrame, BandDefinition) |
-| `FFTEngine.kt` | Cooley-Tukey radix-2 FFT + Hann window |
-| `FrequencyColorMapper.kt` | Hz → HSV colour mapping via log-scaled frequency |
-| `ChromaTheme.kt` | ChromaColors, DarkChromaColors, LightChromaColors, LocalChromaTheme |
-| `MainActivity.kt` | Window setup, permissions, WindowSizeClass, PixelCopy screenshot |
-| `BandColorScreen.kt` | Per-band HSV colour override picker |
-| `HelpScreen.kt` | 13-section scrollable help screen |
-| `OnboardingScreen.kt` | 3-page HorizontalPager first-launch flow |
-
-### Key Technical Decisions
-
-**Pure Kotlin FFT** — Cooley-Tukey implemented in pure Kotlin with no JNI or native dependency. For 4,096-sample frames at ~10fps the JVM overhead is negligible and the code is fully debuggable.
-
-**Single Canvas** — one Compose `Canvas` composable for all rendering. Multiple stacked Canvas composables accumulate without clearing. The canvas clears itself with `drawRect` at the start of every frame.
-
-**Waveform as separate StateFlow** — `StateFlow<List<Float>>` rather than a field inside `UiState`. `FloatArray` uses reference equality and would never trigger recomposition. `List<Float>` uses structural equality and triggers correctly every frame.
-
-**Canvas DrawScope state tracking** — Compose's `Canvas` `DrawScope` is not `@Composable`. State reads inside it are invisible to the snapshot system. Variables like `rmsVolume` and `nowMs` must be read in the composable body before the `Canvas{}` lambda.
-
-**Mirror mode via coordinate reflection** — reflected `(x, y)` coordinates are computed per shape rather than using canvas transforms. `withTransform(scale(-1))` causes full-canvas bleed between frames.
+| Action | Control |
+|--------|---------|
+| **Orbit** (rotate view) | Left mouse button + drag |
+| **Pan** (move view) | Right mouse button + drag |
+| **Zoom** | Mouse scroll wheel |
+| **Reset view** | Double-click |
 
 ---
 
-## Build History
+## Colour Coding
 
-| Build | Version | Key Features Added |
-|---|---|---|
-| 1 | 1.0 | Screen always-on, settings persistence, noise gate slider |
-| 1b | 1.0 | Window config moved to `onCreate()` — fixed status bar flicker |
-| 2 | 1.1 | Named presets, 5 built-in themes, preset save/load/delete |
-| 3–3e | 1.2 | Mirror modes (H/V/Quad), shape trails, canvas clearing fixed |
-| 4 | 1.3 | Beat detection, BPM display, haptic feedback |
-| 5–5g | 1.4–1.5 | Colour animation, waveform overlay, waveform StateFlow fix |
-| 6–6b | 1.6 | Screenshot export, PixelCopy API, preset stale closure fix |
-| 7–7b | 1.7 | Preset share codes (CS:...), RMS history graph, sub-band shading |
-| 8 | 1.8 | Settings hub redesign — 5 themed sub-screens |
-| 9–9c | 1.9 | Haptic feedback UI, preset sharing buttons, Google Drive backup |
-| 10 | 2.0 | 3-page onboarding flow (HorizontalPager) |
-| 11–11c | 2.1 | Particles, oscilloscope rings, Starfield/Bloom/Noise backgrounds, help screen |
-| 12–12n | 2.2–2.3 | Tablet adaptive layout, Dark/Light/System theme, canvas DrawScope fix |
-| 13 | 2.4 | Auto-Gain Control, shape opacity slider, peak frequency label |
-| 14 | 2.5 | Koch/Sierpinski/Dragon fractal shapes, Julia set background |
-| 15 | 2.6 | Terrain background — 3D perspective frequency landscape |
-| 16 | 2.7 | Vector shape — spinning frequency arrows, 15s lifetime |
-| 17 | 2.8 | Ribbon shape — flowing silk wave, tapered, audio-driven undulation |
+| Colour | Move type |
+|--------|-----------|
+| 🔵 Blue | Rapid positioning moves (G0) |
+| 🟠 Orange | Linear cutting moves (G1) |
+| 🟢 Green | Arc moves (G2 / G3) |
 
 ---
 
-## Build & Deployment
+## Troubleshooting
 
-### Requirements
+**Preview pane shows "No preview available"**
+The handler isn't registered for that file extension. Re-run `install.ps1` as Administrator.
 
-- Android Studio Hedgehog or later
-- JDK 17+
-- Android SDK 34
+**Preview pane shows nothing (blank)**
+Another preview handler may be competing. Re-run `install.ps1` as Administrator — it overrides competing handlers for all supported extensions.
 
-### Build from Source
+**Preview pane shows "Parsing toolpath…" and never loads**
+The file is likely stored as a **cloud-only OneDrive placeholder**. `prevhost.exe` (the Windows preview host process) runs in a restricted security context that cannot trigger OneDrive downloads on demand.
 
-```bash
-git clone https://github.com/ThinkingThane/chromasound.git
-cd chromasound
-./gradlew assembleDebug
+**Fix:** Right-click the file (or its parent folder) in Explorer and select **"Always keep on this device"**, then click the file again.
+
+**Preview pane shows "No toolpath moves found"**
+The file was parsed successfully but contained no G0/G1/G2/G3 motion commands. This can happen with setup-only files (tool change scripts, post-processor headers, etc.).
+
+**Only some .gcode files render**
+Files with very large move counts (500K+ lines) may exceed the 40,000 segment display cap. The renderer samples the file evenly so the shape is still visible, but very dense infill patterns may appear simplified.
+
+**Files in OneDrive don't preview**
+See "Parsing toolpath… never loads" above. This is a Windows limitation — `prevhost.exe` cannot access OneDrive virtual files. Pin the files locally as described above.
+
+---
+
+## Uninstallation
+
+Right-click `uninstall.ps1` → **Run with PowerShell**.
+
+This unregisters the shell extension. Explorer restarts automatically. The files in `C:\Program Files\CncPreviewHandler` can then be deleted manually.
+
+---
+
+## Building from Source
+
+### Prerequisites
+
+- Git
+- .NET SDK 8.0 or later ([download](https://dotnet.microsoft.com/download))
+
+### Build locally
+
+```powershell
+git clone https://github.com/ThinkingThane/CncPreviewHandler.git
+cd CncPreviewHandler
+dotnet restore CncPreviewHandler/CncPreviewHandler.csproj
+dotnet build   CncPreviewHandler/CncPreviewHandler.csproj --configuration Release
 ```
 
-### Release Build
-
-```bash
-./gradlew assembleRelease
+The output DLL is at:
+```
+CncPreviewHandler/bin/Release/net48/CncPreviewHandler.dll
 ```
 
-### GitHub Actions CI/CD
+### Publish a release
 
-A workflow at `.github/workflows/build.yml` builds and signs the release APK on every push to `main`. Required repository secrets:
+Tag a commit and push — GitHub Actions builds, packages, and publishes automatically:
 
-| Secret | Purpose |
-|---|---|
-| `KEYSTORE_BASE64` | Base64-encoded release keystore |
-| `KEY_ALIAS` | Key alias within the keystore |
-| `KEY_PASSWORD` | Key password |
-| `STORE_PASSWORD` | Keystore password |
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
 
----
-
-## Permissions
-
-| Permission | Reason | User Prompt? |
-|---|---|---|
-| `RECORD_AUDIO` | Real-time microphone capture for FFT analysis | Yes — at first launch |
-| `VIBRATE` | Haptic feedback on beat detection | No — normal permission |
-| `WRITE_EXTERNAL_STORAGE` (max API 28) | Screenshot save on Android 8/9 | No — granted at install |
+The release zip (containing the DLL, SharpShell.dll, and installer scripts) appears on the Releases page within a few minutes.
 
 ---
 
-## Privacy
+## How It Works
 
-- ChromaSound collects **no user data** of any kind
-- No analytics, no crash reporting, no advertising SDKs
-- Audio is processed entirely on-device — no audio data leaves the phone
-- The only data written to storage is your settings and presets in SharedPreferences
-- Google Drive Auto Backup (settings + presets) can be disabled in Android system settings
+Windows Explorer uses a COM-based plugin system called **Shell Extensions**. This plugin registers itself as an `IPreviewHandler` for CNC/gcode file extensions. When you click a supported file:
+
+1. Explorer calls `prevhost.exe` (a sandboxed COM surrogate process) and loads our DLL
+2. Our **G-code parser** reads the file, interpreting G0/G1 linear moves and G2/G3 arc moves into a list of 3D line segments
+3. The **GDI+ renderer** projects those segments onto the 2D preview pane using a configurable camera (yaw, pitch, zoom, pan)
+4. Mouse events (drag, scroll) update the camera and repaint in real time
+
+Large files are handled by **line decimation** — for files over 150,000 lines, every 2nd or 4th motion line is sampled, keeping the rendered segment count under 40,000 for smooth performance.
+
+### G-code dialect support
+
+The parser handles:
+- `G0` / `G1` — rapid and linear moves
+- `G2` / `G3` — clockwise and counter-clockwise arcs (I/J offset and R radius forms)
+- `G17` / `G18` / `G19` — arc plane selection (XY, XZ, YZ)
+- `G20` / `G21` — inch and metric units
+- `G90` / `G91` — absolute and incremental coordinate modes
+- `G81`–`G89` — canned drill cycles (approximated as plunge moves)
+- Klipper macro lines (`EXCLUDE_OBJECT_*`, `SET_VELOCITY_LIMIT`, etc.) are skipped cleanly
 
 ---
 
-*ChromaSound v2.8.0 · ThinkingThane / FunAndGames · April 2026*
+## Known Limitations
+
+- **OneDrive cloud-only files** cannot be previewed due to Windows sandbox restrictions on `prevhost.exe`. Pin files locally with "Always keep on this device".
+- **Binary gcode** (`.bgcode` used by some Bambu printers) is not supported — only text-based gcode.
+- **Subprogram calls** (`M98`/`M99`) are not followed — only the main program body is rendered.
+- **Variables and expressions** (common in Fanuc macro B) are not evaluated — lines with unresolved variables are skipped.
+
+---
+
+## Project Structure
+
+```
+CncPreviewHandler/
+├── .github/workflows/build.yml   CI/CD — build on push, release on tag
+├── installer/
+│   ├── install.ps1               Registers shell extension + registry keys
+│   ├── uninstall.ps1             Unregisters cleanly
+│   └── README.txt                End-user quick reference
+└── CncPreviewHandler/
+    ├── CncPreviewHandler.csproj  SDK-style .NET Framework 4.8 project
+    ├── Properties/AssemblyInfo.cs
+    └── src/
+        ├── Parser/
+        │   ├── GCodeParser.cs        RS-274 parser with decimation
+        │   ├── MachineState.cs       Modal G-code state tracker
+        │   ├── ArcInterpolator.cs    G2/G3 arc tessellation
+        │   └── ToolpathSegment.cs    Move data model (Vec3 based)
+        └── Shell/
+            ├── CncPreviewHandler.cs  SharpShell COM entry point
+            ├── CncPreviewControl.cs  WinForms preview control + GDI+ 3D viewport
+            └── ShellInterop.cs       IInitializeWithFile COM interface
+```
+
+---
+
+## Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| [SharpShell](https://github.com/dwmkerr/sharpshell) | 2.7.2 | COM shell extension plumbing |
+
+No WPF, no HelixToolkit, no OpenGL — the 3D renderer is pure GDI+ for maximum compatibility.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE) for details.
+
+---
+
+*Built by [ThinkingThane](https://github.com/ThinkingThane) / FunAndGames*
