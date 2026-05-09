@@ -6,8 +6,7 @@ namespace CncPreviewHandler.Diagnostics
 {
     /// <summary>
     /// Lightweight thread-safe logger. Writes to %APPDATA%\CncPreviewHandler\log.txt.
-    /// Rotates the file at 256 KB. Never throws — logging failure must not crash
-    /// the preview handler.
+    /// Rotates the file at 256 KB. Never throws.
     /// </summary>
     internal static class Diag
     {
@@ -15,7 +14,7 @@ namespace CncPreviewHandler.Diagnostics
         private static string _path;
         private const long MaxBytes = 256 * 1024;
 
-        static Log()
+        static Diag()
         {
             try
             {
@@ -66,7 +65,7 @@ namespace CncPreviewHandler.Diagnostics
                     }
                 }
             }
-            catch { /* never throw from logger */ }
+            catch { }
         }
 
         private static void Rotate()
