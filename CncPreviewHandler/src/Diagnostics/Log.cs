@@ -9,7 +9,7 @@ namespace CncPreviewHandler.Diagnostics
     /// Rotates the file at 256 KB. Never throws — logging failure must not crash
     /// the preview handler.
     /// </summary>
-    internal static class Log
+    internal static class Diag
     {
         private static readonly object Sync = new object();
         private static string _path;

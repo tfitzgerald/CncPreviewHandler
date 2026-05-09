@@ -21,24 +21,24 @@ namespace CncPreviewHandler.Shell
             try
             {
                 string path = ResolveSelectedFilePath();
-                Log.Info($"DoPreview called: path='{path ?? "(null)"}'");
+                Diag.Info($"DoPreview called: path='{path ?? "(null)"}'");
 
                 if (string.IsNullOrEmpty(path))
                 {
-                    Log.Warn("DoPreview: no file path resolved from SharpShell");
+                    Diag.Warn("DoPreview: no file path resolved from SharpShell");
                     return new CncPreviewControl(string.Empty);
                 }
 
                 if (!File.Exists(path))
                 {
-                    Log.Warn($"DoPreview: file does not exist: {path}");
+                    Diag.Warn($"DoPreview: file does not exist: {path}");
                 }
 
                 return new CncPreviewControl(path);
             }
             catch (Exception ex)
             {
-                Log.Error("DoPreview threw", ex);
+                Diag.Error("DoPreview threw", ex);
                 return new CncPreviewControl(string.Empty);
             }
         }
@@ -55,7 +55,7 @@ namespace CncPreviewHandler.Shell
                     if (!string.IsNullOrEmpty(v)) return v;
                 }
             }
-            catch (Exception ex) { Log.Warn("SelectedFilePath property access failed: " + ex.Message); }
+            catch (Exception ex) { Diag.Warn("SelectedFilePath property access failed: " + ex.Message); }
 
             try
             {
@@ -64,7 +64,7 @@ namespace CncPreviewHandler.Shell
                     BindingFlags.NonPublic | BindingFlags.Instance);
                 if (field != null) return field.GetValue(this) as string;
             }
-            catch (Exception ex) { Log.Warn("SelectedFilePath field access failed: " + ex.Message); }
+            catch (Exception ex) { Diag.Warn("SelectedFilePath field access failed: " + ex.Message); }
 
             return null;
         }

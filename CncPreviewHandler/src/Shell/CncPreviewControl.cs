@@ -34,7 +34,7 @@ namespace CncPreviewHandler.Shell
 
             if (string.IsNullOrEmpty(filePath))
             {
-                Log.Warn("CncPreviewControl ctor with empty path");
+                Diag.Warn("CncPreviewControl ctor with empty path");
                 return;
             }
 
@@ -52,7 +52,7 @@ namespace CncPreviewHandler.Shell
 
             try
             {
-                Log.Info($"Parse pipeline start: {filePath}");
+                Diag.Info($"Parse pipeline start: {filePath}");
 
                 // Cloud-only file detection
                 try
@@ -60,7 +60,7 @@ namespace CncPreviewHandler.Shell
                     var attr = File.GetAttributes(filePath);
                     bool isCloud = (attr & FileAttributes.ReparsePoint) != 0 ||
                                    (attr & FileAttributes.Offline) != 0;
-                    Log.Info($"  attributes={attr} cloud-only={isCloud}");
+                    Diag.Info($"  attributes={attr} cloud-only={isCloud}");
                     if (isCloud)
                     {
                         SafeInvoke(() =>
@@ -71,23 +71,23 @@ namespace CncPreviewHandler.Shell
                                 "Right-click the file in Explorer and select\r\n" +
                                 "\u201cAlways keep on this device\u201d, then try again.";
                         });
-                        Log.Warn("Aborting parse: file is cloud-only");
+                        Diag.Warn("Aborting parse: file is cloud-only");
                         return;
                     }
                 }
-                catch (Exception ex) { Log.Warn("attribute check failed: " + ex.Message); }
+                catch (Exception ex) { Diag.Warn("attribute check failed: " + ex.Message); }
 
                 SafeInvoke(() => _lbl.Text = "Parsing toolpath\u2026");
 
                 var parser = new GCodeParser();
                 segs = parser.Parse(filePath);
 
-                Log.Info($"  parsed {segs?.Count ?? 0} segments in {Environment.TickCount - t0} ms");
+                Diag.Info($"  parsed {segs?.Count ?? 0} segments in {Environment.TickCount - t0} ms");
             }
             catch (Exception ex)
             {
                 error = ex.Message;
-                Log.Error("Parse pipeline threw", ex);
+                Diag.Error("Parse pipeline threw", ex);
             }
 
             SafeInvoke(() =>
@@ -110,11 +110,11 @@ namespace CncPreviewHandler.Shell
                     var vp = new ToolpathViewport(segs) { Dock = DockStyle.Fill };
                     Controls.Add(vp);
                     vp.Focus();
-                    Log.Info("Viewport mounted successfully");
+                    Diag.Info("Viewport mounted successfully");
                 }
                 catch (Exception ex)
                 {
-                    Log.Error("Viewport mount failed", ex);
+                    Diag.Error("Viewport mount failed", ex);
                     try
                     {
                         Controls.Clear();
@@ -138,7 +138,7 @@ namespace CncPreviewHandler.Shell
             {
                 if (!IsDisposed && IsHandleCreated) BeginInvoke(a);
             }
-            catch (Exception ex) { Log.Warn("SafeInvoke failed: " + ex.Message); }
+            catch (Exception ex) { Diag.Warn("SafeInvoke failed: " + ex.Message); }
         }
     }
 
@@ -235,7 +235,7 @@ namespace CncPreviewHandler.Shell
                 g.DrawString(_segs.Count.ToString("N0")+" segments",
                     _uiFont,Brushes.DimGray,10,26);
             }
-            catch (Exception ex) { Log.Error("OnPaint failed", ex); }
+            catch (Exception ex) { Diag.Error("OnPaint failed", ex); }
         }
 
         void Sw(Graphics g,int x,int y,Color c,string t)
