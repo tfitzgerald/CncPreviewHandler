@@ -8,7 +8,7 @@ namespace CncPreviewHandler.Shell
     [Guid("B1C2D3E4-F5A6-7890-BCDE-F01234567891")]
     [COMServerAssociation(AssociationType.ClassOfExtension,
         ".nc", ".gcode", ".gc", ".g", ".tap", ".cnc")]
-    [PreviewHandler("CNC Toolpath Preview Handler")]
+    [PreviewHandler]
     [DisplayName("CNC Toolpath Preview Handler")]
     public class CncPreviewHandlerServer : SharpPreviewHandler, IInitializeWithFile
     {
