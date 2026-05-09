@@ -1,5 +1,8 @@
+﻿using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using System.Drawing;
 using SharpShell.Attributes;
 using SharpShell.SharpPreviewHandler;
 
@@ -16,21 +19,64 @@ namespace CncPreviewHandler.Shell
         protected override PreviewHandlerControl DoPreview()
         {
             string path = null;
+            string source = "none";
 
-            // SharpShell 2.7.2 stores the path as SelectedFilePath (auto-property)
-            var prop = typeof(SharpPreviewHandler).GetProperty("SelectedFilePath",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            if (prop != null) path = prop.GetValue(this) as string;
+            try
+            {
+                var prop = typeof(SharpPreviewHandler).GetProperty("SelectedFilePath",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+                if (prop != null) { path = prop.GetValue(this) as string; source = "property"; }
+            }
+            catch { }
 
             if (string.IsNullOrEmpty(path))
             {
-                var field = typeof(SharpPreviewHandler).GetField(
-                    "<SelectedFilePath>k__BackingField",
-                    BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field != null) path = field.GetValue(this) as string;
+                try
+                {
+                    var field = typeof(SharpPreviewHandler).GetField(
+                        "<SelectedFilePath>k__BackingField",
+                        BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (field != null) { path = field.GetValue(this) as string; source = "field"; }
+                }
+                catch { }
             }
 
-            return new CncPreviewControl(path ?? string.Empty);
+            // Show diagnostic info
+            string ext    = string.IsNullOrEmpty(path) ? "N/A" : Path.GetExtension(path);
+            string exists = string.IsNullOrEmpty(path) ? "N/A" : File.Exists(path).ToString();
+            string attrs  = "N/A";
+            try { attrs = File.GetAttributes(path).ToString(); } catch { }
+
+            var diag = new DiagControl(
+                $"Path:   {path ?? "(null)"}\n" +
+                $"Source: {source}\n" +
+                $"Ext:    {ext}\n" +
+                $"Exists: {exists}\n" +
+                $"Attrs:  {attrs}");
+
+            // Only proceed to real preview if we have a usable path
+            if (string.IsNullOrEmpty(path)) return diag;
+
+            return new CncPreviewControl(path);
+        }
+    }
+
+    // Temporary diagnostic control
+    class DiagControl : PreviewHandlerControl
+    {
+        public DiagControl(string text)
+        {
+            BackColor = Color.FromArgb(20, 20, 20);
+            Controls.Add(new Label
+            {
+                Dock      = DockStyle.Fill,
+                Text      = text,
+                ForeColor = Color.Yellow,
+                BackColor = Color.FromArgb(20, 20, 20),
+                Font      = new Font("Consolas", 10f),
+                TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
+                Padding   = new Padding(20)
+            });
         }
     }
 }
