@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net48</TargetFramework>
@@ -6,25 +6,25 @@
     <AssemblyName>CncPreviewHandler</AssemblyName>
     <RootNamespace>CncPreviewHandler</RootNamespace>
     <Nullable>disable</Nullable>
-    <LangVersion>7.3</LangVersion>
+    <LangVersion>9.0</LangVersion>
 
     <!--
       UseWPF and UseWindowsForms automatically pull in all WPF, WinForms,
-      and WindowsFormsIntegration (ElementHost) assemblies — no manual
+      and WindowsFormsIntegration (ElementHost) assemblies â€” no manual
       <Reference> entries needed.
     -->
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
 
-    <!-- Strong-name signing removed — not required for COM registration -->
+    <!-- Strong-name signing removed â€” not required for COM registration -->
     <SignAssembly>false</SignAssembly>
 
-    <!-- Prevent SDK auto-generating AssemblyInfo — we have our own in Properties/ -->
+    <!-- Prevent SDK auto-generating AssemblyInfo â€” we have our own in Properties/ -->
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <!--
-    PackageReference style — NuGet restores automatically on CI
+    PackageReference style â€” NuGet restores automatically on CI
     without packages.config or hint paths.
   -->
   <ItemGroup>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -20,10 +20,10 @@ namespace CncPreviewHandler.Parser
         private static readonly Regex TokenRegex =
             new Regex(@"([A-Za-z])\s*(-?[\d]*\.?[\d]+)", RegexOptions.Compiled);
 
-        // Cap on output segments — keeps HelixToolkit rendering fast
+        // Cap on output segments â€” keeps HelixToolkit rendering fast
         private const int MaxSegments = 40_000;
 
-        // Minimum move distance (mm) — filters micro-moves that add no visual detail
+        // Minimum move distance (mm) â€” filters micro-moves that add no visual detail
         private const double MinMoveMm = 0.1;
 
         public List<ToolpathSegment> Parse(string filePath)
@@ -40,12 +40,12 @@ namespace CncPreviewHandler.Parser
             long totalLines = 0;
             try
             {
-                using var counter = new StreamReader(filePath, encoding);
-                while (counter.ReadLine() != null) totalLines++;
+                using (var counter = new StreamReader(filePath, encoding);
+                while (counter.ReadLine() != null) totalLines++; }
             }
             catch { totalLines = 100_000; }
 
-            // Skip every Nth line for very large files — keeps parse time fast
+            // Skip every Nth line for very large files â€” keeps parse time fast
             int stride = totalLines > 300_000 ? 4
                        : totalLines > 150_000 ? 2
                        : 1;
