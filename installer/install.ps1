@@ -1,59 +1,31 @@
 #Requires -RunAsAdministrator
-<#
-.SYNOPSIS
-    Registers CncPreviewHandler.dll as a Windows Explorer shell extension.
-.DESCRIPTION
-    Installs preview pane and thumbnail handlers for .nc, .gcode, .gc, .g, .tap, .cnc files.
-    Clears the Explorer thumbnail cache and restarts Explorer.
-#>
-
 $ErrorActionPreference = 'Stop'
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$dll = Join-Path $dir 'CncPreviewHandler.dll'
-$srm = Join-Path $dir 'ServerRegistrationManager.exe'
+$dir    = Split-Path -Parent $MyInvocation.MyCommand.Path
+$dll    = Join-Path $dir 'CncPreviewHandler.dll'
+$regasm = "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\regasm.exe"
 
-Write-Host ""
-Write-Host "  CNC Preview Handler — Installer" -ForegroundColor Cyan
-Write-Host "  ================================" -ForegroundColor Cyan
-Write-Host ""
+Write-Host "Registering CNC Preview Handler..." -ForegroundColor Cyan
+& $regasm $dll /codebase /nologo
 
-if (-not (Test-Path $dll)) {
-    Write-Host "  ERROR: CncPreviewHandler.dll not found in $dir" -ForegroundColor Red
-    exit 1
+# Register shellex keys for all extensions + GCodeFile class
+$clsid   = "{B1C2D3E4-F5A6-7890-BCDE-F01234567891}"
+$preview = "{8895b1c6-b41f-4c1c-a562-0d564250836f}"
+
+foreach ($ext in @(".nc",".gcode",".gc",".g",".tap",".cnc","GCodeFile")) {
+    $base = if ($ext.StartsWith(".")) { "HKCR\$ext" } else { "HKCR\$ext" }
+    $key  = "Registry::HKEY_CLASSES_ROOT\$ext\shellex\$preview"
+    New-Item  -Path $key -Force | Out-Null
+    Set-ItemProperty -Path $key -Name "(Default)" -Value $clsid
+    Write-Host "  Registered $ext"
 }
 
-# Prefer ServerRegistrationManager (SharpShell tool) over regsvr32 for managed DLLs
-if (Test-Path $srm) {
-    Write-Host "  Registering via ServerRegistrationManager..." -ForegroundColor Yellow
-    & $srm install $dll -codebase
-} else {
-    Write-Host "  Registering via regasm..." -ForegroundColor Yellow
-    $regasm = "${env:SystemRoot}\Microsoft.NET\Framework64\v4.0.30319\regasm.exe"
-    if (-not (Test-Path $regasm)) {
-        Write-Host "  ERROR: regasm.exe not found. Install .NET Framework 4.8." -ForegroundColor Red
-        exit 1
-    }
-    & $regasm $dll /codebase /nologo
-}
+Set-ItemProperty `
+    -Path  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\PreviewHandlers" `
+    -Name  $clsid `
+    -Value "CNC Toolpath Preview Handler"
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  ERROR: Registration failed (exit code $LASTEXITCODE)" -ForegroundColor Red
-    exit $LASTEXITCODE
-}
-
-# Clear Explorer thumbnail cache so new thumbnails are generated fresh
-Write-Host "  Clearing thumbnail cache..." -ForegroundColor Yellow
 Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 800
-$cacheDir = "$env:LocalAppData\Microsoft\Windows\Explorer"
-Get-Item "$cacheDir\thumbcache_*.db" -ErrorAction SilentlyContinue |
-    Remove-Item -Force -ErrorAction SilentlyContinue
-
-# Restart Explorer
-Write-Host "  Restarting Explorer..." -ForegroundColor Yellow
+Remove-Item "$env:LocalAppData\Microsoft\Windows\Explorer\thumbcache_*.db" `
+    -Force -ErrorAction SilentlyContinue
 Start-Process explorer
-
-Write-Host ""
-Write-Host "  Done! Navigate to any folder containing .nc or .gcode files" -ForegroundColor Green
-Write-Host "  and select the Preview Pane (View → Preview Pane) to see the 3D toolpath." -ForegroundColor Green
-Write-Host ""
+Write-Host "Done. Preview pane now handles .nc and .gcode files." -ForegroundColor Green

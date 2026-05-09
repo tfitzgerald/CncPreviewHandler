@@ -6,9 +6,8 @@ namespace CncPreviewHandler.Parser
 
     public class ToolpathSegment
     {
-        public Point3D From     { get; set; }
-        public Point3D To       { get; set; }
+        public Point3D  From     { get; set; }
+        public Point3D  To       { get; set; }
         public MoveType MoveType { get; set; }
-        public bool IsRapid => MoveType == MoveType.Rapid;
     }
 }

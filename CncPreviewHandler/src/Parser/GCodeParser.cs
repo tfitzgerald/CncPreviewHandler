@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -8,83 +8,80 @@ namespace CncPreviewHandler.Parser
 {
     public class GCodeParser
     {
-        private static readonly Regex TokenRegex =
+        private static readonly Regex TokenRe =
             new Regex(@"([A-Za-z])\s*(-?[\d]*\.?[\d]+)", RegexOptions.Compiled);
 
-        private const int MaxSegments = 40000;
+        private const int    MaxSegs   = 40000;
         private const double MinMoveMm = 0.1;
 
         public List<ToolpathSegment> Parse(string filePath)
         {
-            var segments = new List<ToolpathSegment>(MaxSegments);
-            var state    = new MachineState();
+            var segs  = new List<ToolpathSegment>(MaxSegs);
+            var state = new MachineState();
 
-            var encoding = System.Text.Encoding.GetEncoding(1252,
+            var enc = System.Text.Encoding.GetEncoding(1252,
                 new System.Text.EncoderExceptionFallback(),
                 new System.Text.DecoderReplacementFallback("?"));
 
-            long totalLines = 0;
+            // Count lines to set stride
+            long total = 0;
             try
             {
-                using (var counter = new StreamReader(filePath, encoding))
-                {
-                    while (counter.ReadLine() != null) totalLines++;
-                }
+                using (var sr = new StreamReader(filePath, enc))
+                    while (sr.ReadLine() != null) total++;
             }
-            catch { totalLines = 100000; }
+            catch { total = 100000; }
 
-            int stride = totalLines > 300000 ? 4
-                       : totalLines > 150000 ? 2
-                       : 1;
-            int lineIdx = 0;
+            int stride = total > 300000 ? 4 : total > 150000 ? 2 : 1;
+            int idx    = 0;
 
-            foreach (var rawLine in File.ReadLines(filePath, encoding))
+            foreach (var raw in File.ReadLines(filePath, enc))
             {
-                if (segments.Count >= MaxSegments) break;
-                lineIdx++;
+                if (segs.Count >= MaxSegs) break;
+                idx++;
                 try
                 {
-                    var line = StripComments(rawLine).Trim();
-                    if (string.IsNullOrEmpty(line)) continue;
-                    if (line.StartsWith("%") || line == "M30" || line == "M2") continue;
+                    var line = Strip(raw).Trim();
+                    if (line.Length == 0) continue;
+                    if (line[0] == '%' || line == "M30" || line == "M2") continue;
                     if (line.StartsWith("EXCLUDE_") || line.StartsWith("SET_") ||
-                        line.StartsWith("TUNING_") || line.StartsWith("PRINT_")) continue;
+                        line.StartsWith("TUNING_")  || line.StartsWith("PRINT_")) continue;
 
-                    bool hasMotion = line.IndexOf('G') >= 0 || line.IndexOf('X') >= 0 ||
-                                     line.IndexOf('Y') >= 0 || line.IndexOf('Z') >= 0;
-                    if (hasMotion && stride > 1 && (lineIdx % stride) != 0) continue;
+                    bool hasMotion = line.IndexOfAny(new[]{'G','X','Y','Z','g','x','y','z'}) >= 0;
+                    if (hasMotion && stride > 1 && (idx % stride) != 0) continue;
 
-                    ProcessLine(line, state, segments);
+                    ProcessLine(line, state, segs);
                 }
                 catch { }
             }
-            return segments;
+            return segs;
         }
 
-        private static string StripComments(string line)
+        static string Strip(string line)
         {
             line = Regex.Replace(line, @"\(.*?\)", "");
-            int semi = line.IndexOf(';');
-            if (semi >= 0) line = line.Substring(0, semi);
+            int s = line.IndexOf(';');
+            if (s >= 0) line = line.Substring(0, s);
             return line;
         }
 
-        private static Dictionary<char, double> Tokenize(string line)
+        static Dictionary<char,double> Tok(string line)
         {
-            var tokens = new Dictionary<char, double>();
-            foreach (Match m in TokenRegex.Matches(line.ToUpperInvariant()))
+            var d = new Dictionary<char,double>();
+            foreach (Match m in TokenRe.Matches(line.ToUpperInvariant()))
             {
-                char   letter = m.Groups[1].Value[0];
-                double value  = double.Parse(m.Groups[2].Value);
-                tokens[letter] = value;
+                char c = m.Groups[1].Value[0];
+                if (double.TryParse(m.Groups[2].Value,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double v))
+                    d[c] = v;
             }
-            return tokens;
+            return d;
         }
 
-        private static void ProcessLine(string line, MachineState state,
-                                        List<ToolpathSegment> segments)
+        static void ProcessLine(string line, MachineState st, List<ToolpathSegment> segs)
         {
-            var t = Tokenize(line);
+            var t  = Tok(line);
             double? x  = t.ContainsKey('X') ? (double?)t['X'] : null;
             double? y  = t.ContainsKey('Y') ? (double?)t['Y'] : null;
             double? z  = t.ContainsKey('Z') ? (double?)t['Z'] : null;
@@ -98,60 +95,51 @@ namespace CncPreviewHandler.Parser
                 int g = (int)t['G'];
                 switch (g)
                 {
-                    case 0: case 1: case 2: case 3: state.MotionMode = g; break;
-                    case 17: state.Plane = ArcPlane.XY;  break;
-                    case 18: state.Plane = ArcPlane.XZ;  break;
-                    case 19: state.Plane = ArcPlane.YZ;  break;
-                    case 20: state.Units = Units.Inch;    break;
-                    case 21: state.Units = Units.Metric;  break;
-                    case 90: state.Absolute = true;       break;
-                    case 91: state.Absolute = false;      break;
+                    case 0: case 1: case 2: case 3: st.MotionMode = g; break;
+                    case 17: st.Plane = ArcPlane.XY;  break;
+                    case 18: st.Plane = ArcPlane.XZ;  break;
+                    case 19: st.Plane = ArcPlane.YZ;  break;
+                    case 20: st.Units = Units.Inch;    break;
+                    case 21: st.Units = Units.Metric;  break;
+                    case 90: st.Absolute = true;       break;
+                    case 91: st.Absolute = false;      break;
+                    case 80: return;
                     case 81: case 82: case 83: case 84:
                     case 85: case 86: case 87: case 88: case 89:
-                        AppendDrillCycle(x, y, z, state, segments); return;
-                    case 80: return;
+                        Drill(x, y, z, st, segs); return;
                 }
             }
 
             if (x == null && y == null && z == null) return;
+            var tgt   = st.ResolveTarget(x, y, z);
+            var delta = tgt - st.Position;
+            if (delta.Length < MinMoveMm) { st.Position = tgt; return; }
 
-            var target = state.ResolveTarget(x, y, z);
-            var delta  = target - state.Position;
-            if (delta.Length < MinMoveMm) return;
-
-            switch (state.MotionMode)
+            switch (st.MotionMode)
             {
-                case 0:
-                    segments.Add(new ToolpathSegment
-                        { From = state.Position, To = target, MoveType = MoveType.Rapid });
-                    break;
-                case 1:
-                    segments.Add(new ToolpathSegment
-                        { From = state.Position, To = target, MoveType = MoveType.Cut });
-                    break;
+                case 0: segs.Add(new ToolpathSegment
+                            { From=st.Position, To=tgt, MoveType=MoveType.Rapid }); break;
+                case 1: segs.Add(new ToolpathSegment
+                            { From=st.Position, To=tgt, MoveType=MoveType.Cut });   break;
                 case 2: case 3:
-                    segments.AddRange(ArcInterpolator.Expand(
-                        state.Position, target, ii, jj, kk, r,
-                        clockwise: state.MotionMode == 2,
-                        plane: state.Plane));
-                    break;
+                    segs.AddRange(ArcInterpolator.Expand(
+                        st.Position, tgt, ii, jj, kk, r,
+                        clockwise: st.MotionMode == 2, plane: st.Plane)); break;
             }
-            state.Position = target;
+            st.Position = tgt;
         }
 
-        private static void AppendDrillCycle(double? x, double? y, double? z,
-                                             MachineState state,
-                                             List<ToolpathSegment> segments)
+        static void Drill(double? x, double? y, double? z,
+                          MachineState st, List<ToolpathSegment> segs)
         {
-            var xyPos  = state.ResolveTarget(x, y, state.Position.Z);
-            var drillZ = z.HasValue
-                ? new Point3D(xyPos.X, xyPos.Y,
-                    state.Units == Units.Inch ? z.Value * 25.4 : z.Value)
-                : xyPos;
-            segments.Add(new ToolpathSegment { From = state.Position, To = xyPos,   MoveType = MoveType.Rapid });
-            segments.Add(new ToolpathSegment { From = xyPos,          To = drillZ,  MoveType = MoveType.Cut   });
-            segments.Add(new ToolpathSegment { From = drillZ,         To = xyPos,   MoveType = MoveType.Rapid });
-            state.Position = xyPos;
+            var xy = st.ResolveTarget(x, y, st.Position.Z);
+            var dz = z.HasValue
+                ? new Point3D(xy.X, xy.Y, st.Units==Units.Inch ? z.Value*25.4 : z.Value)
+                : xy;
+            segs.Add(new ToolpathSegment { From=st.Position, To=xy, MoveType=MoveType.Rapid });
+            segs.Add(new ToolpathSegment { From=xy, To=dz, MoveType=MoveType.Cut });
+            segs.Add(new ToolpathSegment { From=dz, To=xy, MoveType=MoveType.Rapid });
+            st.Position = xy;
         }
     }
 }

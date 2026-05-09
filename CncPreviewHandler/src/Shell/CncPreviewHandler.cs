@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using SharpShell.Attributes;
 using SharpShell.SharpPreviewHandler;
@@ -15,18 +15,22 @@ namespace CncPreviewHandler.Shell
     {
         protected override PreviewHandlerControl DoPreview()
         {
-            string filePath = null;
+            string path = null;
+
+            // SharpShell 2.7.2 stores the path as SelectedFilePath (auto-property)
             var prop = typeof(SharpPreviewHandler).GetProperty("SelectedFilePath",
-                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
-            if (prop != null) filePath = prop.GetValue(this) as string;
-            if (string.IsNullOrEmpty(filePath))
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (prop != null) path = prop.GetValue(this) as string;
+
+            if (string.IsNullOrEmpty(path))
             {
                 var field = typeof(SharpPreviewHandler).GetField(
                     "<SelectedFilePath>k__BackingField",
                     BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field != null) filePath = field.GetValue(this) as string;
+                if (field != null) path = field.GetValue(this) as string;
             }
-            return new CncPreviewControl(filePath ?? string.Empty);
+
+            return new CncPreviewControl(path ?? string.Empty);
         }
     }
 }
