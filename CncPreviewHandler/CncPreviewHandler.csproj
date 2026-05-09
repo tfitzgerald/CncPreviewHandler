@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>CncPreviewHandler</AssemblyName>
+    <RootNamespace>CncPreviewHandler</RootNamespace>
+    <Nullable>disable</Nullable>
+    <LangVersion>7.3</LangVersion>
+
+    <!--
+      UseWPF and UseWindowsForms automatically pull in all WPF, WinForms,
+      and WindowsFormsIntegration (ElementHost) assemblies — no manual
+      <Reference> entries needed.
+    -->
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+
+    <!-- Strong-name signing removed — not required for COM registration -->
+    <SignAssembly>false</SignAssembly>
+
+    <!-- Prevent SDK auto-generating AssemblyInfo — we have our own in Properties/ -->
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+  </PropertyGroup>
+
+  <!--
+    PackageReference style — NuGet restores automatically on CI
+    without packages.config or hint paths.
+  -->
+  <ItemGroup>
+    <PackageReference Include="SharpShell"       Version="2.7.2"  />
+    <PackageReference Include="HelixToolkit.Wpf" Version="2.25.0" />
+  </ItemGroup>
+
+</Project>

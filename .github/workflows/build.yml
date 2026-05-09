@@ -1,0 +1,141 @@
+name: Build CNC Preview Plugin
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags:     [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PROJECT: CncPreviewHandler/CncPreviewHandler.csproj
+  CONFIG:  Release
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1: Build on every push / PR
+  # ─────────────────────────────────────────────
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'   # SDK used to drive the build; target is still net48
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $v = "0.0.0"
+          }
+          echo "VERSION=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT }}
+
+      - name: Build
+        run: |
+          dotnet build ${{ env.PROJECT }} `
+            --configuration ${{ env.CONFIG }} `
+            --no-restore `
+            -p:AssemblyVersion=${{ steps.version.outputs.VERSION }} `
+            -p:FileVersion=${{ steps.version.outputs.VERSION }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CncPreviewHandler-${{ github.sha }}
+          path: |
+            CncPreviewHandler/bin/${{ env.CONFIG }}/net48/CncPreviewHandler.dll
+            CncPreviewHandler/bin/${{ env.CONFIG }}/net48/SharpShell.dll
+            CncPreviewHandler/bin/${{ env.CONFIG }}/net48/HelixToolkit.Wpf.dll
+          if-no-files-found: error
+          retention-days: 30
+
+  # ─────────────────────────────────────────────
+  # Job 2: Package & publish release on vX.Y.Z tag
+  # ─────────────────────────────────────────────
+  release:
+    needs: build
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart("v")
+          echo "VERSION=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore ${{ env.PROJECT }}
+
+      - name: Build release
+        run: |
+          dotnet build ${{ env.PROJECT }} `
+            --configuration ${{ env.CONFIG }} `
+            --no-restore `
+            -p:AssemblyVersion=${{ steps.version.outputs.VERSION }} `
+            -p:FileVersion=${{ steps.version.outputs.VERSION }}
+
+      - name: Package release zip
+        shell: pwsh
+        run: |
+          $out = "release"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          $binDir = "CncPreviewHandler\bin\${{ env.CONFIG }}\net48"
+          Copy-Item "$binDir\CncPreviewHandler.dll"   $out
+          Copy-Item "$binDir\SharpShell.dll"          $out
+          Copy-Item "$binDir\HelixToolkit.Wpf.dll"    $out
+
+          Copy-Item "installer\install.ps1"   $out
+          Copy-Item "installer\uninstall.ps1" $out
+          Copy-Item "installer\README.txt"    $out
+
+          $zip = "CncPreviewHandler-${{ github.ref_name }}-x64.zip"
+          Compress-Archive -Path "$out\*" -DestinationPath $zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ github.ref_name }}
+          name:       CNC Preview Handler ${{ github.ref_name }}
+          body: |
+            ## CNC Preview Handler ${{ github.ref_name }}
+
+            Windows Explorer preview and thumbnail handler for CNC toolpath files.
+
+            **Supported file types:** `.nc` `.gcode` `.gc` `.g` `.tap` `.cnc`
+
+            ### Installation
+            1. Extract the zip
+            2. Right-click `install.ps1` → **Run with PowerShell** (as Administrator)
+            3. Explorer restarts automatically
+
+            ### Uninstallation
+            Run `uninstall.ps1` as Administrator.
+          files: CncPreviewHandler-${{ github.ref_name }}-x64.zip
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

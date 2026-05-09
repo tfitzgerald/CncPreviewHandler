@@ -1,0 +1,21 @@
+# Build outputs
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# NuGet packages (restored automatically by CI)
+packages/
+*.nupkg
+
+# Strong-name key — commit this; it is NOT a secret
+# CncPreviewHandler.snk   <-- keep committed
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Rider / JetBrains
+.idea/
+*.DotSettings.user
