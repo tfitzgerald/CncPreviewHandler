@@ -32,13 +32,13 @@ namespace CncPreviewHandler.Shell
             }
 
             // WPF requires an Application instance for mouse/keyboard event routing
-            if (Application.Current == null)
+            if (System.Windows.Application.Current == null)
             {
                 try
                 {
-                    new Application
+                    new System.Windows.Application
                     {
-                        ShutdownMode = ShutdownMode.OnExplicitShutdown
+                        ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown
                     };
                 }
                 catch { }
@@ -49,8 +49,8 @@ namespace CncPreviewHandler.Shell
                 Content    = "Parsing toolpath\u2026",
                 Foreground = Brushes.Gray,
                 FontSize   = 13,
-                HorizontalContentAlignment = HorizontalAlignment.Center,
-                VerticalContentAlignment   = VerticalAlignment.Center,
+                HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center,
+                VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
             };
 
             var host = new ElementHost
