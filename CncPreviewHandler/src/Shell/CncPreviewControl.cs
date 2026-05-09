@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using CncPreviewHandler.Parser;
@@ -13,11 +12,13 @@ namespace CncPreviewHandler.Shell
 {
     public class CncPreviewControl : PreviewHandlerControl
     {
+        private Label _lbl;
+
         public CncPreviewControl(string filePath)
         {
             BackColor = Color.FromArgb(20, 20, 20);
 
-            var lbl = new Label
+            _lbl = new Label
             {
                 Dock      = DockStyle.Fill,
                 TextAlign = ContentAlignment.MiddleCenter,
@@ -28,65 +29,70 @@ namespace CncPreviewHandler.Shell
                             ? "No file path received from Explorer"
                             : "Parsing toolpath\u2026"
             };
-            Controls.Add(lbl);
+            Controls.Add(_lbl);
+
             if (string.IsNullOrEmpty(filePath)) return;
+
+            // Force handle creation NOW so BeginInvoke works from background thread
+            var _ = Handle;
 
             Task.Run(() =>
             {
+                List<ToolpathSegment> segs = null;
+                string error = null;
+
                 try
                 {
-                    // Force OneDrive to download cloud-only (ReparsePoint) files
-                    var attr = File.GetAttributes(filePath);
-                    bool isCloudOnly = (attr & FileAttributes.ReparsePoint) != 0 ||
-                                       (attr & FileAttributes.Offline) != 0;
-                    if (isCloudOnly)
+                    // Handle OneDrive cloud-only files
+                    try
                     {
-                        Invoke((Action)(() => lbl.Text = "Downloading from OneDrive\u2026"));
-                        // Reading the file forces OneDrive to hydrate it
-                        using (var fs = File.OpenRead(filePath))
+                        var attr = File.GetAttributes(filePath);
+                        if ((attr & FileAttributes.ReparsePoint) != 0 ||
+                            (attr & FileAttributes.Offline) != 0)
                         {
-                            var buf = new byte[512];
-                            fs.Read(buf, 0, buf.Length);
-                        }
-                        // Wait up to 15 seconds for the file to become available
-                        int waited = 0;
-                        while (waited < 15000)
-                        {
-                            attr = File.GetAttributes(filePath);
-                            if ((attr & FileAttributes.ReparsePoint) == 0 &&
-                                (attr & FileAttributes.Offline) == 0) break;
-                            Thread.Sleep(500);
-                            waited += 500;
+                            SafeInvoke(() => _lbl.Text = "Downloading from OneDrive\u2026");
+                            // Touch the file to trigger hydration
+                            using (File.OpenRead(filePath)) { }
                         }
                     }
+                    catch { }
 
-                    Invoke((Action)(() => lbl.Text = "Parsing toolpath\u2026"));
-                    var segs = new GCodeParser().Parse(filePath);
-
-                    Invoke((Action)(() =>
-                    {
-                        Controls.Clear();
-                        if (segs.Count == 0)
-                        {
-                            lbl.Text      = "No toolpath moves found in file";
-                            lbl.ForeColor = Color.OrangeRed;
-                            Controls.Add(lbl);
-                            return;
-                        }
-                        var vp = new ToolpathViewport(segs) { Dock = DockStyle.Fill };
-                        Controls.Add(vp);
-                        vp.Focus();
-                    }));
+                    SafeInvoke(() => _lbl.Text = "Parsing toolpath\u2026");
+                    segs = new GCodeParser().Parse(filePath);
                 }
-                catch (Exception ex)
+                catch (Exception ex) { error = ex.Message; }
+
+                SafeInvoke(() =>
                 {
-                    Invoke((Action)(() =>
+                    if (error != null)
                     {
-                        lbl.ForeColor = Color.OrangeRed;
-                        lbl.Text      = "Error: " + ex.Message;
-                    }));
-                }
+                        _lbl.ForeColor = Color.OrangeRed;
+                        _lbl.Text      = "Error: " + error;
+                        return;
+                    }
+                    if (segs == null || segs.Count == 0)
+                    {
+                        _lbl.ForeColor = Color.OrangeRed;
+                        _lbl.Text      = "No toolpath moves found";
+                        return;
+                    }
+                    Controls.Clear();
+                    var vp = new ToolpathViewport(segs) { Dock = DockStyle.Fill };
+                    Controls.Add(vp);
+                    vp.Focus();
+                });
             });
+        }
+
+        // BeginInvoke avoids deadlock; guard against disposal
+        void SafeInvoke(Action a)
+        {
+            try
+            {
+                if (!IsDisposed && IsHandleCreated)
+                    BeginInvoke(a);
+            }
+            catch { }
         }
     }
 
@@ -108,31 +114,31 @@ namespace CncPreviewHandler.Shell
             DoubleBuffered = true;
             BackColor = Color.FromArgb(20, 20, 20);
 
-            float minX=float.MaxValue, maxX=float.MinValue;
-            float minY=float.MaxValue, maxY=float.MinValue;
-            float minZ=float.MaxValue, maxZ=float.MinValue;
+            float x0=float.MaxValue,x1=float.MinValue;
+            float y0=float.MaxValue,y1=float.MinValue;
+            float z0=float.MaxValue,z1=float.MinValue;
             foreach (var s in segs)
             {
-                Expand(ref minX,ref maxX,(float)s.From.X,(float)s.To.X);
-                Expand(ref minY,ref maxY,(float)s.From.Y,(float)s.To.Y);
-                Expand(ref minZ,ref maxZ,(float)s.From.Z,(float)s.To.Z);
+                Exp(ref x0,ref x1,(float)s.From.X,(float)s.To.X);
+                Exp(ref y0,ref y1,(float)s.From.Y,(float)s.To.Y);
+                Exp(ref z0,ref z1,(float)s.From.Z,(float)s.To.Z);
             }
-            _cx=(minX+maxX)/2f; _cy=(minY+maxY)/2f; _cz=(minZ+maxZ)/2f;
-            _bbSize=Math.Max(maxX-minX,Math.Max(maxY-minY,maxZ-minZ));
+            _cx=(x0+x1)/2f; _cy=(y0+y1)/2f; _cz=(z0+z1)/2f;
+            _bbSize=Math.Max(x1-x0,Math.Max(y1-y0,z1-z0));
             if(_bbSize<0.001f)_bbSize=1f;
         }
 
-        static void Expand(ref float lo,ref float hi,float a,float b)
+        static void Exp(ref float lo,ref float hi,float a,float b)
         { if(a<lo)lo=a; if(a>hi)hi=a; if(b<lo)lo=b; if(b>hi)hi=b; }
 
-        PointF Project(double px,double py,double pz)
+        PointF Proj(double px,double py,double pz)
         {
             double x=px-_cx,y=py-_cy,z=pz-_cz;
             double yr=_yaw*Math.PI/180.0;
             double x1=x*Math.Cos(yr)-y*Math.Sin(yr);
             double y1=x*Math.Sin(yr)+y*Math.Cos(yr);
             double pr=_pitch*Math.PI/180.0;
-            double x2=x1, y2=y1*Math.Cos(pr)-z*Math.Sin(pr);
+            double x2=x1,y2=y1*Math.Cos(pr)-z*Math.Sin(pr);
             float sc=_zoom*Math.Min(Width,Height)*0.75f/_bbSize;
             return new PointF(Width/2f+_panX+(float)(x2*sc),
                               Height/2f+_panY-(float)(y2*sc));
@@ -145,30 +151,30 @@ namespace CncPreviewHandler.Shell
             float w=Width,h=Height;
             foreach(var s in _segs)
             {
-                var p1=Project(s.From.X,s.From.Y,s.From.Z);
-                var p2=Project(s.To.X,s.To.Y,s.To.Z);
-                if(p1.X<-50&&p2.X<-50) continue;
-                if(p1.X>w+50&&p2.X>w+50) continue;
-                if(p1.Y<-50&&p2.Y<-50) continue;
-                if(p1.Y>h+50&&p2.Y>h+50) continue;
+                var p1=Proj(s.From.X,s.From.Y,s.From.Z);
+                var p2=Proj(s.To.X,s.To.Y,s.To.Z);
+                if(p1.X<-50&&p2.X<-50)continue;
+                if(p1.X>w+50&&p2.X>w+50)continue;
+                if(p1.Y<-50&&p2.Y<-50)continue;
+                if(p1.Y>h+50&&p2.Y>h+50)continue;
                 var pen=s.MoveType==MoveType.Rapid?_rapidPen:
                         s.MoveType==MoveType.Arc?_arcPen:_cutPen;
                 try{g.DrawLine(pen,p1,p2);}catch{}
             }
             int lx=10,ly=Height-66;
-            Swatch(g,lx,ly,     Color.FromArgb(70,130,220),"Rapid (G0)");
-            Swatch(g,lx,ly+22,  Color.FromArgb(220,90,40), "Cut (G1)");
-            Swatch(g,lx,ly+44,  Color.FromArgb(60,180,80), "Arc (G2/G3)");
+            Sw(g,lx,ly,     Color.FromArgb(70,130,220),"Rapid (G0)");
+            Sw(g,lx,ly+22,  Color.FromArgb(220,90,40), "Cut (G1)");
+            Sw(g,lx,ly+44,  Color.FromArgb(60,180,80), "Arc (G2/G3)");
             g.DrawString("Drag: orbit   Right-drag: pan   Scroll: zoom   Dbl-click: reset",
                 _uiFont,Brushes.DimGray,10,10);
             g.DrawString(_segs.Count.ToString("N0")+" segments",
                 _uiFont,Brushes.DimGray,10,26);
         }
 
-        void Swatch(Graphics g,int x,int y,Color c,string txt)
+        void Sw(Graphics g,int x,int y,Color c,string t)
         {
-            using(var b=new SolidBrush(c)) g.FillRectangle(b,x,y+6,14,3);
-            g.DrawString(txt,_uiFont,Brushes.Silver,x+20,y);
+            using(var b=new SolidBrush(c))g.FillRectangle(b,x,y+6,14,3);
+            g.DrawString(t,_uiFont,Brushes.Silver,x+20,y);
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
@@ -177,10 +183,10 @@ namespace CncPreviewHandler.Shell
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
-            if(!_leftDown&&!_rightDown) return;
-            int dx=e.X-_lastMouse.X, dy=e.Y-_lastMouse.Y;
+            if(!_leftDown&&!_rightDown)return;
+            int dx=e.X-_lastMouse.X,dy=e.Y-_lastMouse.Y;
             _lastMouse=e.Location;
-            if(_leftDown){_yaw+=dx*0.5f;_pitch=Clamp(_pitch+dy*0.5f,-89f,89f);}
+            if(_leftDown){_yaw+=dx*0.5f;_pitch=Cl(_pitch+dy*0.5f,-89f,89f);}
             else{_panX+=dx;_panY+=dy;}
             Invalidate();
         }
@@ -189,18 +195,16 @@ namespace CncPreviewHandler.Shell
         { _leftDown=_rightDown=false; Capture=false; }
 
         protected override void OnMouseWheel(MouseEventArgs e)
-        { _zoom=Clamp(_zoom*(e.Delta>0?1.15f:0.87f),0.01f,500f); Invalidate(); }
+        { _zoom=Cl(_zoom*(e.Delta>0?1.15f:0.87f),0.01f,500f); Invalidate(); }
 
         protected override void OnMouseDoubleClick(MouseEventArgs e)
         { _yaw=-45f;_pitch=30f;_zoom=1f;_panX=0f;_panY=0f; Invalidate(); }
 
-        static float Clamp(float v,float lo,float hi)=>v<lo?lo:v>hi?hi:v;
+        static float Cl(float v,float lo,float hi)=>v<lo?lo:v>hi?hi:v;
 
         protected override void Dispose(bool d)
-        {
-            if(d){_rapidPen.Dispose();_cutPen.Dispose();
-                  _arcPen.Dispose();_uiFont.Dispose();}
-            base.Dispose(d);
-        }
+        { if(d){_rapidPen.Dispose();_cutPen.Dispose();
+                _arcPen.Dispose();_uiFont.Dispose();}
+          base.Dispose(d); }
     }
 }
