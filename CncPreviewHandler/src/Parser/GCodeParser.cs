@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
@@ -23,7 +23,7 @@ namespace CncPreviewHandler.Parser
             var segments = new List<ToolpathSegment>();
             var state    = new MachineState();
 
-            foreach (var rawLine in File.ReadLines(filePath))
+            foreach (var rawLine in File.ReadLines(filePath, System.Text.Encoding.GetEncoding(1252, new System.Text.EncoderExceptionFallback(), new System.Text.DecoderReplacementFallback("?"))))
             {
                 try
                 {
@@ -83,7 +83,7 @@ namespace CncPreviewHandler.Parser
                 int g = (int)t['G'];
                 switch (g)
                 {
-                    // Motion modes — remembered for subsequent lines
+                    // Motion modes â€” remembered for subsequent lines
                     case 0: case 1: case 2: case 3:
                         state.MotionMode = g;
                         break;
@@ -101,13 +101,13 @@ namespace CncPreviewHandler.Parser
                     case 90: state.Absolute = true;      break;
                     case 91: state.Absolute = false;     break;
 
-                    // Canned drill cycles — treat as a plunge to Z then retract
+                    // Canned drill cycles â€” treat as a plunge to Z then retract
                     case 81: case 82: case 83: case 84:
                     case 85: case 86: case 87: case 88: case 89:
                         AppendDrillCycle(x, y, z, state, segments);
                         return;
 
-                    // Canned cycle cancel — no geometry
+                    // Canned cycle cancel â€” no geometry
                     case 80: return;
                 }
             }
