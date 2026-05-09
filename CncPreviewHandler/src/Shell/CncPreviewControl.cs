@@ -1,5 +1,4 @@
-﻿using System;
-using System.Windows;
+using System;
 using System.Windows.Forms;
 using System.Windows.Forms.Integration;
 using System.Windows.Media;
@@ -11,87 +10,43 @@ using SharpShell.SharpPreviewHandler;
 
 namespace CncPreviewHandler.Shell
 {
+    /// <summary>
+    /// The actual preview UI control.
+    /// Extends PreviewHandlerControl (a SharpShell WinForms UserControl).
+    /// Hosts a HelixToolkit WPF 3D viewport via ElementHost.
+    /// Parsing runs on a background thread so Explorer stays responsive.
+    /// </summary>
     public class CncPreviewControl : PreviewHandlerControl
     {
         public CncPreviewControl(string filePath)
         {
-            BackColor = System.Drawing.Color.Black;
-
-            if (string.IsNullOrEmpty(filePath))
-            {
-                Controls.Add(new Label
-                {
-                    Dock = DockStyle.Fill,
-                    Text = "No file path received",
-                    ForeColor = System.Drawing.Color.OrangeRed,
-                    BackColor = System.Drawing.Color.Black,
-                    TextAlign = System.Drawing.ContentAlignment.MiddleCenter,
-                    Font = new System.Drawing.Font("Segoe UI", 11f)
-                });
-                return;
-            }
-
-            // WPF requires an Application instance for mouse/keyboard event routing
-            if (System.Windows.Application.Current == null)
-            {
-                try
-                {
-                    new System.Windows.Application
-                    {
-                        ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown
-                    };
-                }
-                catch { }
-            }
-
+            // Loading placeholder shown immediately
             var loadLabel = new System.Windows.Controls.Label
             {
-                Content    = "Parsing toolpath\u2026",
+                Content    = "Parsing toolpath…",
                 Foreground = Brushes.Gray,
                 FontSize   = 13,
                 HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center,
-                VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+                VerticalContentAlignment   = System.Windows.VerticalAlignment.Center,
             };
 
-            var host = new ElementHost
-            {
-                Dock  = DockStyle.Fill,
-                Child = loadLabel
-            };
+            var host = new ElementHost { Dock = DockStyle.Fill, Child = loadLabel };
             Controls.Add(host);
 
+            // Parse on a background thread — large files can be slow
             System.Threading.Tasks.Task.Run(() =>
             {
                 try
                 {
                     var segments = new GCodeParser().Parse(filePath);
-
-                    if (segments.Count == 0)
-                    {
-                        Invoke((Action)(() =>
-                            loadLabel.Content = "No toolpath moves found in file."));
-                        return;
-                    }
-
-                    // Build viewport on UI thread (WPF requirement)
-                    Invoke((Action)(() =>
-                    {
-                        try
-                        {
-                            host.Child = BuildViewport(segments);
-                        }
-                        catch (Exception ex)
-                        {
-                            loadLabel.Content    = "Render error: " + ex.Message;
-                            loadLabel.Foreground = Brushes.OrangeRed;
-                        }
-                    }));
+                    var viewport = BuildViewport(segments);
+                    Invoke((Action)(() => host.Child = viewport));
                 }
                 catch (Exception ex)
                 {
                     Invoke((Action)(() =>
                     {
-                        loadLabel.Content    = "Parse error: " + ex.Message;
+                        loadLabel.Content    = $"Preview failed: {ex.Message}";
                         loadLabel.Foreground = Brushes.OrangeRed;
                     }));
                 }
@@ -106,19 +61,18 @@ namespace CncPreviewHandler.Shell
                 Background            = Brushes.Black,
                 ShowCoordinateSystem  = true,
                 ZoomExtentsWhenLoaded = true,
-                IsHeadLightEnabled    = true,
             };
 
             viewport.Children.Add(new DefaultLights());
 
             ToolpathGeometryBuilder.Build(segments,
                 out var rapidLines, out var cutLines, out var arcLines);
+
             viewport.Children.Add(rapidLines);
             viewport.Children.Add(cutLines);
             viewport.Children.Add(arcLines);
 
             var bounds = ToolpathGeometryBuilder.ComputeBounds(segments);
-
             if (bounds.RangeX > 0 && bounds.RangeY > 0)
             {
                 viewport.Children.Add(new GridLinesVisual3D
@@ -126,15 +80,14 @@ namespace CncPreviewHandler.Shell
                     Center        = new Point3D(bounds.Center.X, bounds.Center.Y, bounds.MinZ),
                     Width         = bounds.RangeX * 1.2,
                     Length        = bounds.RangeY * 1.2,
-                    MinorDistance = Math.Max(1, bounds.RangeX / 20),
-                    MajorDistance = Math.Max(5, bounds.RangeX / 4),
+                    MinorDistance = bounds.RangeX / 20,
+                    MajorDistance = bounds.RangeX / 4,
                     Thickness     = 0.3,
                 });
             }
 
             double dist = Math.Sqrt(
-                bounds.RangeX * bounds.RangeX +
-                bounds.RangeY * bounds.RangeY) + 50;
+                bounds.RangeX * bounds.RangeX + bounds.RangeY * bounds.RangeY) + 50;
 
             viewport.Camera = new PerspectiveCamera
             {
