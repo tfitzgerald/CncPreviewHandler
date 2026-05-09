@@ -87,7 +87,7 @@ namespace CncPreviewHandler.Shell
                 viewport.Children.Add(cutLines);
                 viewport.Children.Add(arcLines);
 
-                viewport.Measure(new Size(size, size));
+                viewport.Measure(new System.Windows.Size(size, size));
                 viewport.Arrange(new Rect(0, 0, size, size));
 
                 var rtb = new RenderTargetBitmap(
