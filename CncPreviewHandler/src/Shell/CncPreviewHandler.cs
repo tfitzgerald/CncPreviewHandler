@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text;
 using SharpShell.Attributes;
 using SharpShell.SharpPreviewHandler;
 
@@ -15,21 +16,25 @@ namespace CncPreviewHandler.Shell
     {
         protected override PreviewHandlerControl DoPreview()
         {
-            // SharpShell stores the path in a private field after IInitializeWithFile
-            // is called internally. Read it via reflection since it is not exposed.
-            string filePath = null;
-
-            foreach (var name in new[] { "filePath", "selectedItemPath",
-                                         "_filePath",  "m_filePath", "path" })
+            // Walk the entire inheritance chain and dump every field
+            var sb = new StringBuilder();
+            var type = typeof(SharpPreviewHandler);
+            while (type != null && type != typeof(object))
             {
-                var field = typeof(SharpPreviewHandler).GetField(name,
-                    BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field == null) continue;
-                filePath = field.GetValue(this) as string;
-                if (!string.IsNullOrEmpty(filePath)) break;
+                foreach (var f in type.GetFields(
+                    BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+                {
+                    try
+                    {
+                        var val = f.GetValue(this);
+                        sb.AppendLine($"[{type.Name}] {f.FieldType.Name} {f.Name} = {val}");
+                    }
+                    catch { }
+                }
+                type = type.BaseType;
             }
 
-            return new CncPreviewControl(filePath ?? string.Empty);
+            return new CncPreviewControl(sb.ToString());
         }
     }
 }
