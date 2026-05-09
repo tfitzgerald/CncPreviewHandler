@@ -1,8 +1,8 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Windows.Forms;
-using System.Drawing;
+using CncPreviewHandler.Diagnostics;
 using SharpShell.Attributes;
 using SharpShell.SharpPreviewHandler;
 
@@ -18,65 +18,55 @@ namespace CncPreviewHandler.Shell
     {
         protected override PreviewHandlerControl DoPreview()
         {
-            string path = null;
-            string source = "none";
+            try
+            {
+                string path = ResolveSelectedFilePath();
+                Log.Info($"DoPreview called: path='{path ?? "(null)"}'");
 
+                if (string.IsNullOrEmpty(path))
+                {
+                    Log.Warn("DoPreview: no file path resolved from SharpShell");
+                    return new CncPreviewControl(string.Empty);
+                }
+
+                if (!File.Exists(path))
+                {
+                    Log.Warn($"DoPreview: file does not exist: {path}");
+                }
+
+                return new CncPreviewControl(path);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("DoPreview threw", ex);
+                return new CncPreviewControl(string.Empty);
+            }
+        }
+
+        private string ResolveSelectedFilePath()
+        {
             try
             {
                 var prop = typeof(SharpPreviewHandler).GetProperty("SelectedFilePath",
                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (prop != null) { path = prop.GetValue(this) as string; source = "property"; }
-            }
-            catch { }
-
-            if (string.IsNullOrEmpty(path))
-            {
-                try
+                if (prop != null)
                 {
-                    var field = typeof(SharpPreviewHandler).GetField(
-                        "<SelectedFilePath>k__BackingField",
-                        BindingFlags.NonPublic | BindingFlags.Instance);
-                    if (field != null) { path = field.GetValue(this) as string; source = "field"; }
+                    var v = prop.GetValue(this) as string;
+                    if (!string.IsNullOrEmpty(v)) return v;
                 }
-                catch { }
             }
+            catch (Exception ex) { Log.Warn("SelectedFilePath property access failed: " + ex.Message); }
 
-            // Show diagnostic info
-            string ext    = string.IsNullOrEmpty(path) ? "N/A" : Path.GetExtension(path);
-            string exists = string.IsNullOrEmpty(path) ? "N/A" : File.Exists(path).ToString();
-            string attrs  = "N/A";
-            try { attrs = File.GetAttributes(path).ToString(); } catch { }
-
-            var diag = new DiagControl(
-                $"Path:   {path ?? "(null)"}\n" +
-                $"Source: {source}\n" +
-                $"Ext:    {ext}\n" +
-                $"Exists: {exists}\n" +
-                $"Attrs:  {attrs}");
-
-            // Only proceed to real preview if we have a usable path
-            if (string.IsNullOrEmpty(path)) return diag;
-
-            return new CncPreviewControl(path);
-        }
-    }
-
-    // Temporary diagnostic control
-    class DiagControl : PreviewHandlerControl
-    {
-        public DiagControl(string text)
-        {
-            BackColor = Color.FromArgb(20, 20, 20);
-            Controls.Add(new Label
+            try
             {
-                Dock      = DockStyle.Fill,
-                Text      = text,
-                ForeColor = Color.Yellow,
-                BackColor = Color.FromArgb(20, 20, 20),
-                Font      = new Font("Consolas", 10f),
-                TextAlign = System.Drawing.ContentAlignment.MiddleLeft,
-                Padding   = new Padding(20)
-            });
+                var field = typeof(SharpPreviewHandler).GetField(
+                    "<SelectedFilePath>k__BackingField",
+                    BindingFlags.NonPublic | BindingFlags.Instance);
+                if (field != null) return field.GetValue(this) as string;
+            }
+            catch (Exception ex) { Log.Warn("SelectedFilePath field access failed: " + ex.Message); }
+
+            return null;
         }
     }
 }

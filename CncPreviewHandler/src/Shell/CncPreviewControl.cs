@@ -5,6 +5,7 @@ using System.Drawing.Drawing2D;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using CncPreviewHandler.Diagnostics;
 using CncPreviewHandler.Parser;
 using SharpShell.SharpPreviewHandler;
 
@@ -31,45 +32,67 @@ namespace CncPreviewHandler.Shell
             };
             Controls.Add(_lbl);
 
-            if (string.IsNullOrEmpty(filePath)) return;
+            if (string.IsNullOrEmpty(filePath))
+            {
+                Log.Warn("CncPreviewControl ctor with empty path");
+                return;
+            }
 
-            // Force handle creation NOW so BeginInvoke works from background thread
+            // Force handle creation now so BeginInvoke works
             var _ = Handle;
 
-            Task.Run(() =>
-            {
-                List<ToolpathSegment> segs = null;
-                string error = null;
+            Task.Run(() => ParsePipeline(filePath));
+        }
 
+        private void ParsePipeline(string filePath)
+        {
+            List<ToolpathSegment> segs = null;
+            string error = null;
+            var t0 = Environment.TickCount;
+
+            try
+            {
+                Log.Info($"Parse pipeline start: {filePath}");
+
+                // Cloud-only file detection
                 try
                 {
-                    // Detect OneDrive / cloud-only files
-                    try
+                    var attr = File.GetAttributes(filePath);
+                    bool isCloud = (attr & FileAttributes.ReparsePoint) != 0 ||
+                                   (attr & FileAttributes.Offline) != 0;
+                    Log.Info($"  attributes={attr} cloud-only={isCloud}");
+                    if (isCloud)
                     {
-                        var attr = File.GetAttributes(filePath);
-                        bool isCloud = (attr & FileAttributes.ReparsePoint) != 0 ||
-                                       (attr & FileAttributes.Offline) != 0;
-                        if (isCloud)
+                        SafeInvoke(() =>
                         {
-                            SafeInvoke(() =>
-                            {
-                                _lbl.ForeColor = Color.FromArgb(255, 200, 0);
-                                _lbl.Text =
-                                    "File is OneDrive cloud-only\u2014not accessible from the preview pane.\r\n\r\n" +
-                                    "Fix: right-click the file in Explorer\r\n" +
-                                    "and select \u201cAlways keep on this device\u201d.";
-                            });
-                            return;
-                        }
+                            _lbl.ForeColor = Color.FromArgb(255, 200, 0);
+                            _lbl.Text =
+                                "File is OneDrive cloud-only and not accessible from the preview pane.\r\n\r\n" +
+                                "Right-click the file in Explorer and select\r\n" +
+                                "\u201cAlways keep on this device\u201d, then try again.";
+                        });
+                        Log.Warn("Aborting parse: file is cloud-only");
+                        return;
                     }
-                    catch { }
-
-                    SafeInvoke(() => _lbl.Text = "Parsing toolpath\u2026");
-                    segs = new GCodeParser().Parse(filePath);
                 }
-                catch (Exception ex) { error = ex.Message; }
+                catch (Exception ex) { Log.Warn("attribute check failed: " + ex.Message); }
 
-                SafeInvoke(() =>
+                SafeInvoke(() => _lbl.Text = "Parsing toolpath\u2026");
+
+                var parser = new GCodeParser();
+                segs = parser.Parse(filePath);
+
+                Log.Info($"  parsed {segs?.Count ?? 0} segments in {Environment.TickCount - t0} ms");
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                Log.Error("Parse pipeline threw", ex);
+            }
+
+            SafeInvoke(() =>
+            {
+                try
                 {
                     if (error != null)
                     {
@@ -87,19 +110,35 @@ namespace CncPreviewHandler.Shell
                     var vp = new ToolpathViewport(segs) { Dock = DockStyle.Fill };
                     Controls.Add(vp);
                     vp.Focus();
-                });
+                    Log.Info("Viewport mounted successfully");
+                }
+                catch (Exception ex)
+                {
+                    Log.Error("Viewport mount failed", ex);
+                    try
+                    {
+                        Controls.Clear();
+                        _lbl = new Label
+                        {
+                            Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
+                            ForeColor = Color.OrangeRed, BackColor = Color.FromArgb(20,20,20),
+                            Font = new Font("Segoe UI", 11f),
+                            Text = "Render error: " + ex.Message
+                        };
+                        Controls.Add(_lbl);
+                    }
+                    catch { }
+                }
             });
         }
 
-        // BeginInvoke avoids deadlock; guard against disposal
-        void SafeInvoke(Action a)
+        private void SafeInvoke(Action a)
         {
             try
             {
-                if (!IsDisposed && IsHandleCreated)
-                    BeginInvoke(a);
+                if (!IsDisposed && IsHandleCreated) BeginInvoke(a);
             }
-            catch { }
+            catch (Exception ex) { Log.Warn("SafeInvoke failed: " + ex.Message); }
         }
     }
 
@@ -120,6 +159,8 @@ namespace CncPreviewHandler.Shell
             _segs = segs;
             DoubleBuffered = true;
             BackColor = Color.FromArgb(20, 20, 20);
+            SetStyle(ControlStyles.Selectable, true);
+            TabStop = true;
 
             float x0=float.MaxValue,x1=float.MinValue;
             float y0=float.MaxValue,y1=float.MinValue;
@@ -133,6 +174,21 @@ namespace CncPreviewHandler.Shell
             _cx=(x0+x1)/2f; _cy=(y0+y1)/2f; _cz=(z0+z1)/2f;
             _bbSize=Math.Max(x1-x0,Math.Max(y1-y0,z1-z0));
             if(_bbSize<0.001f)_bbSize=1f;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { Focus(); base.OnMouseEnter(e); }
+
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_MOUSEWHEEL = 0x020A;
+            if (m.Msg == WM_MOUSEWHEEL)
+            {
+                int delta = (short)((m.WParam.ToInt64() >> 16) & 0xFFFF);
+                _zoom = Cl(_zoom * (delta > 0 ? 1.15f : 0.87f), 0.01f, 500f);
+                Invalidate();
+                return;
+            }
+            base.WndProc(ref m);
         }
 
         static void Exp(ref float lo,ref float hi,float a,float b)
@@ -153,29 +209,33 @@ namespace CncPreviewHandler.Shell
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            var g=e.Graphics;
-            g.SmoothingMode=SmoothingMode.AntiAlias;
-            float w=Width,h=Height;
-            foreach(var s in _segs)
+            try
             {
-                var p1=Proj(s.From.X,s.From.Y,s.From.Z);
-                var p2=Proj(s.To.X,s.To.Y,s.To.Z);
-                if(p1.X<-50&&p2.X<-50)continue;
-                if(p1.X>w+50&&p2.X>w+50)continue;
-                if(p1.Y<-50&&p2.Y<-50)continue;
-                if(p1.Y>h+50&&p2.Y>h+50)continue;
-                var pen=s.MoveType==MoveType.Rapid?_rapidPen:
-                        s.MoveType==MoveType.Arc?_arcPen:_cutPen;
-                try{g.DrawLine(pen,p1,p2);}catch{}
+                var g=e.Graphics;
+                g.SmoothingMode=SmoothingMode.AntiAlias;
+                float w=Width,h=Height;
+                foreach(var s in _segs)
+                {
+                    var p1=Proj(s.From.X,s.From.Y,s.From.Z);
+                    var p2=Proj(s.To.X,s.To.Y,s.To.Z);
+                    if(p1.X<-50&&p2.X<-50)continue;
+                    if(p1.X>w+50&&p2.X>w+50)continue;
+                    if(p1.Y<-50&&p2.Y<-50)continue;
+                    if(p1.Y>h+50&&p2.Y>h+50)continue;
+                    var pen=s.MoveType==MoveType.Rapid?_rapidPen:
+                            s.MoveType==MoveType.Arc?_arcPen:_cutPen;
+                    g.DrawLine(pen,p1,p2);
+                }
+                int lx=10,ly=Height-66;
+                Sw(g,lx,ly,    Color.FromArgb(70,130,220),"Rapid (G0)");
+                Sw(g,lx,ly+22, Color.FromArgb(220,90,40), "Cut (G1)");
+                Sw(g,lx,ly+44, Color.FromArgb(60,180,80), "Arc (G2/G3)");
+                g.DrawString("Drag: orbit   Right-drag: pan   Scroll: zoom   Dbl-click: reset",
+                    _uiFont,Brushes.DimGray,10,10);
+                g.DrawString(_segs.Count.ToString("N0")+" segments",
+                    _uiFont,Brushes.DimGray,10,26);
             }
-            int lx=10,ly=Height-66;
-            Sw(g,lx,ly,     Color.FromArgb(70,130,220),"Rapid (G0)");
-            Sw(g,lx,ly+22,  Color.FromArgb(220,90,40), "Cut (G1)");
-            Sw(g,lx,ly+44,  Color.FromArgb(60,180,80), "Arc (G2/G3)");
-            g.DrawString("Drag: orbit   Right-drag: pan   Scroll: zoom   Dbl-click: reset",
-                _uiFont,Brushes.DimGray,10,10);
-            g.DrawString(_segs.Count.ToString("N0")+" segments",
-                _uiFont,Brushes.DimGray,10,26);
+            catch (Exception ex) { Log.Error("OnPaint failed", ex); }
         }
 
         void Sw(Graphics g,int x,int y,Color c,string t)
@@ -201,9 +261,6 @@ namespace CncPreviewHandler.Shell
         protected override void OnMouseUp(MouseEventArgs e)
         { _leftDown=_rightDown=false; Capture=false; }
 
-        protected override void OnMouseWheel(MouseEventArgs e)
-        { _zoom=Cl(_zoom*(e.Delta>0?1.15f:0.87f),0.01f,500f); Invalidate(); }
-
         protected override void OnMouseDoubleClick(MouseEventArgs e)
         { _yaw=-45f;_pitch=30f;_zoom=1f;_panX=0f;_panY=0f; Invalidate(); }
 
@@ -215,4 +272,3 @@ namespace CncPreviewHandler.Shell
           base.Dispose(d); }
     }
 }
-
