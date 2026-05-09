@@ -38,8 +38,7 @@ namespace CncPreviewHandler.Shell
                 return;
             }
 
-            // Force handle creation now so BeginInvoke works
-            var _ = Handle;
+            var _ = Handle; // force handle creation
 
             Task.Run(() => ParsePipeline(filePath));
         }
@@ -47,14 +46,13 @@ namespace CncPreviewHandler.Shell
         private void ParsePipeline(string filePath)
         {
             List<ToolpathSegment> segs = null;
-            string error = null;
+            string error = null, dialect = null;
             var t0 = Environment.TickCount;
 
             try
             {
                 Diag.Info($"Parse pipeline start: {filePath}");
 
-                // Cloud-only file detection
                 try
                 {
                     var attr = File.GetAttributes(filePath);
@@ -77,11 +75,11 @@ namespace CncPreviewHandler.Shell
                 }
                 catch (Exception ex) { Diag.Warn("attribute check failed: " + ex.Message); }
 
+                try { dialect = DialectDetector.Detect(filePath); } catch { }
+                Diag.Info($"  dialect={dialect ?? "(unknown)"}");
+
                 SafeInvoke(() => _lbl.Text = "Parsing toolpath\u2026");
-
-                var parser = new GCodeParser();
-                segs = parser.Parse(filePath);
-
+                segs = new GCodeParser().Parse(filePath);
                 Diag.Info($"  parsed {segs?.Count ?? 0} segments in {Environment.TickCount - t0} ms");
             }
             catch (Exception ex)
@@ -90,93 +88,294 @@ namespace CncPreviewHandler.Shell
                 Diag.Error("Parse pipeline threw", ex);
             }
 
+            var capturedSegs    = segs;
+            var capturedDialect = dialect;
+            var capturedError   = error;
+
             SafeInvoke(() =>
             {
                 try
                 {
-                    if (error != null)
+                    if (capturedError != null)
                     {
                         _lbl.ForeColor = Color.OrangeRed;
-                        _lbl.Text      = "Error: " + error;
+                        _lbl.Text      = "Error: " + capturedError;
                         return;
                     }
-                    if (segs == null || segs.Count == 0)
+                    if (capturedSegs == null || capturedSegs.Count == 0)
                     {
                         _lbl.ForeColor = Color.OrangeRed;
                         _lbl.Text      = "No toolpath moves found";
                         return;
                     }
                     Controls.Clear();
-                    var vp = new ToolpathViewport(segs) { Dock = DockStyle.Fill };
+                    var vp = new ToolpathViewport(capturedSegs, filePath, capturedDialect)
+                        { Dock = DockStyle.Fill };
                     Controls.Add(vp);
                     vp.Focus();
-                    Diag.Info("Viewport mounted successfully");
+                    Diag.Info("Viewport mounted");
                 }
-                catch (Exception ex)
-                {
-                    Diag.Error("Viewport mount failed", ex);
-                    try
-                    {
-                        Controls.Clear();
-                        _lbl = new Label
-                        {
-                            Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
-                            ForeColor = Color.OrangeRed, BackColor = Color.FromArgb(20,20,20),
-                            Font = new Font("Segoe UI", 11f),
-                            Text = "Render error: " + ex.Message
-                        };
-                        Controls.Add(_lbl);
-                    }
-                    catch { }
-                }
+                catch (Exception ex) { Diag.Error("Viewport mount failed", ex); }
             });
         }
 
         private void SafeInvoke(Action a)
         {
-            try
-            {
-                if (!IsDisposed && IsHandleCreated) BeginInvoke(a);
-            }
+            try { if (!IsDisposed && IsHandleCreated) BeginInvoke(a); }
             catch (Exception ex) { Diag.Warn("SafeInvoke failed: " + ex.Message); }
         }
     }
 
     sealed class ToolpathViewport : Control
     {
+        // ── Data ────────────────────────────────────────────────────────────
         private readonly List<ToolpathSegment> _segs;
+        private readonly string _fileName, _dialect;
+        private readonly double _rangeX, _rangeY, _rangeZ;
+        private readonly double _totalTravelMm, _cutTravelMm, _rapidTravelMm;
+
+        // ── Camera ──────────────────────────────────────────────────────────
         private float _cx, _cy, _cz, _bbSize;
         private float _yaw=-45f, _pitch=30f, _zoom=1f, _panX, _panY;
+
+        // ── Mouse ───────────────────────────────────────────────────────────
         private Point _lastMouse;
+        private Point _cursorPos;
+        private bool  _cursorVisible;
         private bool  _leftDown, _rightDown;
+
+        // ── Resources ───────────────────────────────────────────────────────
         private readonly Pen  _rapidPen = new Pen(Color.FromArgb(70,130,220), 1f);
         private readonly Pen  _cutPen   = new Pen(Color.FromArgb(220,90,40),  1f);
         private readonly Pen  _arcPen   = new Pen(Color.FromArgb(60,180,80),  1f);
-        private readonly Font _uiFont   = new Font("Segoe UI", 8f);
+        private readonly Font _uiFont   = new Font("Segoe UI", 8.25f);
+        private readonly Font _titleFont= new Font("Segoe UI", 9f, FontStyle.Bold);
+        private readonly StringFormat _rightAlign =
+            new StringFormat { Alignment = StringAlignment.Far };
 
-        public ToolpathViewport(List<ToolpathSegment> segs)
+        public ToolpathViewport(List<ToolpathSegment> segs, string filePath, string dialect)
         {
-            _segs = segs;
+            _segs     = segs;
+            _fileName = string.IsNullOrEmpty(filePath) ? "" : Path.GetFileName(filePath);
+            _dialect  = dialect;
+
             DoubleBuffered = true;
             BackColor = Color.FromArgb(20, 20, 20);
             SetStyle(ControlStyles.Selectable, true);
             TabStop = true;
 
+            // Bounding box + travel statistics in one pass
             float x0=float.MaxValue,x1=float.MinValue;
             float y0=float.MaxValue,y1=float.MinValue;
             float z0=float.MaxValue,z1=float.MinValue;
+            double totTravel=0, cutTravel=0, rapTravel=0;
+
             foreach (var s in segs)
             {
                 Exp(ref x0,ref x1,(float)s.From.X,(float)s.To.X);
                 Exp(ref y0,ref y1,(float)s.From.Y,(float)s.To.Y);
                 Exp(ref z0,ref z1,(float)s.From.Z,(float)s.To.Z);
+
+                double dx = s.To.X - s.From.X;
+                double dy = s.To.Y - s.From.Y;
+                double dz = s.To.Z - s.From.Z;
+                double d  = Math.Sqrt(dx*dx + dy*dy + dz*dz);
+                totTravel += d;
+                if (s.MoveType == MoveType.Rapid) rapTravel += d;
+                else                              cutTravel += d;
             }
-            _cx=(x0+x1)/2f; _cy=(y0+y1)/2f; _cz=(z0+z1)/2f;
-            _bbSize=Math.Max(x1-x0,Math.Max(y1-y0,z1-z0));
-            if(_bbSize<0.001f)_bbSize=1f;
+
+            _cx = (x0+x1)/2f; _cy = (y0+y1)/2f; _cz = (z0+z1)/2f;
+            _rangeX = x1-x0; _rangeY = y1-y0; _rangeZ = z1-z0;
+            _bbSize = Math.Max((float)_rangeX, Math.Max((float)_rangeY, (float)_rangeZ));
+            if (_bbSize < 0.001f) _bbSize = 1f;
+
+            _totalTravelMm = totTravel;
+            _cutTravelMm   = cutTravel;
+            _rapidTravelMm = rapTravel;
         }
 
-        protected override void OnMouseEnter(EventArgs e) { Focus(); base.OnMouseEnter(e); }
+        static void Exp(ref float lo,ref float hi,float a,float b)
+        { if(a<lo)lo=a; if(a>hi)hi=a; if(b<lo)lo=b; if(b>hi)hi=b; }
+
+        // ── Forward projection (world → screen) ─────────────────────────────
+        PointF Proj(double px,double py,double pz)
+        {
+            double x=px-_cx,y=py-_cy,z=pz-_cz;
+            double yr=_yaw*Math.PI/180.0;
+            double cy=Math.Cos(yr), sy=Math.Sin(yr);
+            double x1=x*cy-y*sy, y1=x*sy+y*cy;
+            double pr=_pitch*Math.PI/180.0;
+            double cp=Math.Cos(pr), sp=Math.Sin(pr);
+            double x2=x1, y2=y1*cp-z*sp;
+            float sc=_zoom*Math.Min(Width,Height)*0.75f/_bbSize;
+            return new PointF(Width/2f+_panX+(float)(x2*sc),
+                              Height/2f+_panY-(float)(y2*sc));
+        }
+
+        // ── Inverse projection (screen → world, assuming Z = bb-centre) ─────
+        bool TryUnproj(PointF screen, out double wx, out double wy, out double wz)
+        {
+            wx = wy = wz = 0;
+            try
+            {
+                float sc = _zoom*Math.Min(Width,Height)*0.75f/_bbSize;
+                if (sc < 1e-6f) return false;
+
+                double x2 = (screen.X - Width/2.0  - _panX) / sc;
+                double y2 = -(screen.Y - Height/2.0 - _panY) / sc;
+
+                double pr = _pitch*Math.PI/180.0;
+                double cp = Math.Cos(pr), sp = Math.Sin(pr);
+                if (Math.Abs(cp) < 1e-6) return false;
+
+                // Assume z(local) = 0 → world z = _cz
+                double zLocal = 0.0;
+                double y1 = (y2 + zLocal*sp) / cp;
+                double x1 = x2;
+
+                double yr = _yaw*Math.PI/180.0;
+                double cy = Math.Cos(yr), sy = Math.Sin(yr);
+                double x = x1*cy + y1*sy;
+                double y = -x1*sy + y1*cy;
+
+                wx = x + _cx;
+                wy = y + _cy;
+                wz = _cz;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        // ── Paint ───────────────────────────────────────────────────────────
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            try
+            {
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                float w = Width, h = Height;
+
+                foreach (var s in _segs)
+                {
+                    var p1 = Proj(s.From.X, s.From.Y, s.From.Z);
+                    var p2 = Proj(s.To.X,   s.To.Y,   s.To.Z);
+                    if (p1.X<-50 && p2.X<-50) continue;
+                    if (p1.X>w+50 && p2.X>w+50) continue;
+                    if (p1.Y<-50 && p2.Y<-50) continue;
+                    if (p1.Y>h+50 && p2.Y>h+50) continue;
+                    var pen = s.MoveType == MoveType.Rapid ? _rapidPen :
+                              s.MoveType == MoveType.Arc   ? _arcPen   : _cutPen;
+                    g.DrawLine(pen, p1, p2);
+                }
+
+                DrawInfoPanel(g);
+                DrawLegend(g);
+                DrawHints(g);
+                DrawCursorReadout(g);
+            }
+            catch (Exception ex) { Diag.Error("OnPaint failed", ex); }
+        }
+
+        void DrawInfoPanel(Graphics g)
+        {
+            int x = 10, y = 10;
+            var primary   = new SolidBrush(Color.FromArgb(235, 235, 235));
+            var secondary = new SolidBrush(Color.FromArgb(160, 160, 160));
+            try
+            {
+                if (!string.IsNullOrEmpty(_fileName))
+                {
+                    g.DrawString(_fileName, _titleFont, primary, x, y);
+                    y += 18;
+                }
+                if (!string.IsNullOrEmpty(_dialect))
+                {
+                    g.DrawString(_dialect, _uiFont, secondary, x, y);
+                    y += 14;
+                }
+                g.DrawString(
+                    $"Size: {_rangeX:F1} \u00D7 {_rangeY:F1} \u00D7 {_rangeZ:F1} mm",
+                    _uiFont, secondary, x, y);
+                y += 14;
+                g.DrawString(
+                    $"{_segs.Count:N0} moves \u00B7 {_totalTravelMm/1000.0:F2} m total \u00B7 {_cutTravelMm/1000.0:F2} m cut",
+                    _uiFont, secondary, x, y);
+            }
+            finally { primary.Dispose(); secondary.Dispose(); }
+        }
+
+        void DrawLegend(Graphics g)
+        {
+            int x = 10, y = Height - 66;
+            Sw(g, x, y,      Color.FromArgb(70, 130, 220), "Rapid (G0)");
+            Sw(g, x, y + 22, Color.FromArgb(220, 90, 40),  "Cut (G1)");
+            Sw(g, x, y + 44, Color.FromArgb(60, 180, 80),  "Arc (G2/G3)");
+        }
+
+        void Sw(Graphics g, int x, int y, Color c, string t)
+        {
+            using (var b = new SolidBrush(c)) g.FillRectangle(b, x, y + 6, 14, 3);
+            g.DrawString(t, _uiFont, Brushes.Silver, x + 20, y);
+        }
+
+        void DrawHints(Graphics g)
+        {
+            string l1 = "drag=orbit  R-drag=pan  scroll=zoom  2\u00D7click=reset";
+            string l2 = "[1] top  [2] front  [3] right  [4] left  [5] iso  [6] reset";
+            var rect1 = new RectangleF(0, 10, Width-10, 14);
+            var rect2 = new RectangleF(0, 26, Width-10, 14);
+            g.DrawString(l1, _uiFont, Brushes.DimGray, rect1, _rightAlign);
+            g.DrawString(l2, _uiFont, Brushes.DimGray, rect2, _rightAlign);
+        }
+
+        void DrawCursorReadout(Graphics g)
+        {
+            if (!_cursorVisible) return;
+            if (!TryUnproj(_cursorPos, out double wx, out double wy, out double wz))
+                return;
+            string txt = $"X {wx,8:F2}   Y {wy,8:F2}   Z {wz,8:F2}";
+            var sz = g.MeasureString(txt, _uiFont);
+            using (var bg = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
+                g.FillRectangle(bg,
+                    Width - sz.Width - 14, Height - sz.Height - 12,
+                    sz.Width + 8, sz.Height + 4);
+            g.DrawString(txt, _uiFont, Brushes.Silver,
+                Width - sz.Width - 10, Height - sz.Height - 10);
+        }
+
+        // ── Mouse ───────────────────────────────────────────────────────────
+        protected override void OnMouseEnter(EventArgs e)
+        { Focus(); _cursorVisible = true; base.OnMouseEnter(e); }
+
+        protected override void OnMouseLeave(EventArgs e)
+        { _cursorVisible = false; Invalidate(); base.OnMouseLeave(e); }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        { _lastMouse=e.Location; _leftDown=e.Button==MouseButtons.Left;
+          _rightDown=e.Button==MouseButtons.Right; Capture=true; Focus(); }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            _cursorPos = e.Location;
+            _cursorVisible = true;
+
+            if (_leftDown || _rightDown)
+            {
+                int dx = e.X - _lastMouse.X, dy = e.Y - _lastMouse.Y;
+                _lastMouse = e.Location;
+                if (_leftDown) { _yaw += dx*0.5f; _pitch = Cl(_pitch + dy*0.5f, -89f, 89f); }
+                else           { _panX += dx; _panY += dy; }
+            }
+            Invalidate();
+        }
+
+        protected override void OnMouseUp(MouseEventArgs e)
+        { _leftDown = _rightDown = false; Capture = false; }
+
+        protected override void OnMouseDoubleClick(MouseEventArgs e)
+        { _yaw=-45f; _pitch=30f; _zoom=1f; _panX=0f; _panY=0f; Invalidate(); }
 
         protected override void WndProc(ref Message m)
         {
@@ -191,84 +390,52 @@ namespace CncPreviewHandler.Shell
             base.WndProc(ref m);
         }
 
-        static void Exp(ref float lo,ref float hi,float a,float b)
-        { if(a<lo)lo=a; if(a>hi)hi=a; if(b<lo)lo=b; if(b>hi)hi=b; }
-
-        PointF Proj(double px,double py,double pz)
+        // ── Keyboard view presets ───────────────────────────────────────────
+        protected override bool IsInputKey(Keys keyData)
         {
-            double x=px-_cx,y=py-_cy,z=pz-_cz;
-            double yr=_yaw*Math.PI/180.0;
-            double x1=x*Math.Cos(yr)-y*Math.Sin(yr);
-            double y1=x*Math.Sin(yr)+y*Math.Cos(yr);
-            double pr=_pitch*Math.PI/180.0;
-            double x2=x1,y2=y1*Math.Cos(pr)-z*Math.Sin(pr);
-            float sc=_zoom*Math.Min(Width,Height)*0.75f/_bbSize;
-            return new PointF(Width/2f+_panX+(float)(x2*sc),
-                              Height/2f+_panY-(float)(y2*sc));
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            try
+            switch (keyData)
             {
-                var g=e.Graphics;
-                g.SmoothingMode=SmoothingMode.AntiAlias;
-                float w=Width,h=Height;
-                foreach(var s in _segs)
-                {
-                    var p1=Proj(s.From.X,s.From.Y,s.From.Z);
-                    var p2=Proj(s.To.X,s.To.Y,s.To.Z);
-                    if(p1.X<-50&&p2.X<-50)continue;
-                    if(p1.X>w+50&&p2.X>w+50)continue;
-                    if(p1.Y<-50&&p2.Y<-50)continue;
-                    if(p1.Y>h+50&&p2.Y>h+50)continue;
-                    var pen=s.MoveType==MoveType.Rapid?_rapidPen:
-                            s.MoveType==MoveType.Arc?_arcPen:_cutPen;
-                    g.DrawLine(pen,p1,p2);
-                }
-                int lx=10,ly=Height-66;
-                Sw(g,lx,ly,    Color.FromArgb(70,130,220),"Rapid (G0)");
-                Sw(g,lx,ly+22, Color.FromArgb(220,90,40), "Cut (G1)");
-                Sw(g,lx,ly+44, Color.FromArgb(60,180,80), "Arc (G2/G3)");
-                g.DrawString("Drag: orbit   Right-drag: pan   Scroll: zoom   Dbl-click: reset",
-                    _uiFont,Brushes.DimGray,10,10);
-                g.DrawString(_segs.Count.ToString("N0")+" segments",
-                    _uiFont,Brushes.DimGray,10,26);
+                case Keys.D1: case Keys.D2: case Keys.D3:
+                case Keys.D4: case Keys.D5: case Keys.D6:
+                case Keys.NumPad1: case Keys.NumPad2: case Keys.NumPad3:
+                case Keys.NumPad4: case Keys.NumPad5: case Keys.NumPad6:
+                    return true;
             }
-            catch (Exception ex) { Diag.Error("OnPaint failed", ex); }
+            return base.IsInputKey(keyData);
         }
 
-        void Sw(Graphics g,int x,int y,Color c,string t)
+        protected override void OnKeyDown(KeyEventArgs e)
         {
-            using(var b=new SolidBrush(c))g.FillRectangle(b,x,y+6,14,3);
-            g.DrawString(t,_uiFont,Brushes.Silver,x+20,y);
+            base.OnKeyDown(e);
+            switch (e.KeyCode)
+            {
+                case Keys.D1: case Keys.NumPad1: SetView(  0,   0); break; // Top
+                case Keys.D2: case Keys.NumPad2: SetView(  0, -89); break; // Front
+                case Keys.D3: case Keys.NumPad3: SetView(-90, -89); break; // Right
+                case Keys.D4: case Keys.NumPad4: SetView( 90, -89); break; // Left
+                case Keys.D5: case Keys.NumPad5: SetView(-45,  30); break; // Iso
+                case Keys.D6: case Keys.NumPad6:
+                    _yaw=-45f; _pitch=30f; _zoom=1f; _panX=0f; _panY=0f;
+                    Invalidate(); break;                                   // Reset
+                default: return;
+            }
+            e.Handled = true;
         }
 
-        protected override void OnMouseDown(MouseEventArgs e)
-        { _lastMouse=e.Location; _leftDown=e.Button==MouseButtons.Left;
-          _rightDown=e.Button==MouseButtons.Right; Capture=true; }
+        void SetView(float yaw, float pitch)
+        { _yaw = yaw; _pitch = pitch; Invalidate(); }
 
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            if(!_leftDown&&!_rightDown)return;
-            int dx=e.X-_lastMouse.X,dy=e.Y-_lastMouse.Y;
-            _lastMouse=e.Location;
-            if(_leftDown){_yaw+=dx*0.5f;_pitch=Cl(_pitch+dy*0.5f,-89f,89f);}
-            else{_panX+=dx;_panY+=dy;}
-            Invalidate();
-        }
-
-        protected override void OnMouseUp(MouseEventArgs e)
-        { _leftDown=_rightDown=false; Capture=false; }
-
-        protected override void OnMouseDoubleClick(MouseEventArgs e)
-        { _yaw=-45f;_pitch=30f;_zoom=1f;_panX=0f;_panY=0f; Invalidate(); }
-
-        static float Cl(float v,float lo,float hi)=>v<lo?lo:v>hi?hi:v;
+        static float Cl(float v, float lo, float hi) => v < lo ? lo : v > hi ? hi : v;
 
         protected override void Dispose(bool d)
-        { if(d){_rapidPen.Dispose();_cutPen.Dispose();
-                _arcPen.Dispose();_uiFont.Dispose();}
-          base.Dispose(d); }
+        {
+            if (d)
+            {
+                _rapidPen.Dispose(); _cutPen.Dispose();
+                _arcPen.Dispose();   _uiFont.Dispose();
+                _titleFont.Dispose(); _rightAlign.Dispose();
+            }
+            base.Dispose(d);
+        }
     }
 }
