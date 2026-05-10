@@ -141,6 +141,7 @@ namespace CncPreviewHandler.Shell
         private readonly Pen  _arcPen   = new Pen(Color.FromArgb(60,180,80),  1f);
         private readonly Font _uiFont   = new Font("Segoe UI", 8.25f);
         private readonly Font _titleFont= new Font("Segoe UI", 9f, FontStyle.Bold);
+        private readonly Font _hintFont = new Font("Segoe UI", 10f);
         private readonly StringFormat _rightAlign =
             new StringFormat { Alignment = StringAlignment.Far };
 
@@ -369,10 +370,10 @@ namespace CncPreviewHandler.Shell
         {
             string l1 = "drag=orbit  R-drag=pan  scroll=zoom  2\u00D7click=reset";
             string l2 = "[1] top  [2] front  [3] right  [4] left  [5] iso  [6] reset";
-            g.DrawString(l1, _uiFont, Brushes.DimGray,
-                new RectangleF(0, 10, Width-10, 14), _rightAlign);
-            g.DrawString(l2, _uiFont, Brushes.DimGray,
-                new RectangleF(0, 26, Width-10, 14), _rightAlign);
+            g.DrawString(l1, _hintFont, Brushes.DimGray,
+                new RectangleF(0, 10, Width-10, 20), _rightAlign);
+            g.DrawString(l2, _hintFont, Brushes.DimGray,
+                new RectangleF(0, 32, Width-10, 20), _rightAlign);
         }
 
         void DrawCursorReadout(Graphics g)
@@ -484,10 +485,11 @@ namespace CncPreviewHandler.Shell
             {
                 _rapidPen.Dispose(); _cutPen.Dispose();
                 _arcPen.Dispose();   _uiFont.Dispose();
-                _titleFont.Dispose(); _rightAlign.Dispose();
+                _titleFont.Dispose(); _hintFont.Dispose(); _rightAlign.Dispose();
                 if (_progressiveTimer != null) { _progressiveTimer.Dispose(); _progressiveTimer = null; }
             }
             base.Dispose(d);
         }
     }
 }
+
