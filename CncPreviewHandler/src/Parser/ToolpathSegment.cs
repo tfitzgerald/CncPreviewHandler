@@ -13,8 +13,10 @@
 
     public class ToolpathSegment
     {
-        public Vec3     From     { get; set; }
-        public Vec3     To       { get; set; }
-        public MoveType MoveType { get; set; }
+        public Vec3     From             { get; set; }
+        public Vec3     To               { get; set; }
+        public MoveType MoveType         { get; set; }
+        public double   FeedrateMmPerMin { get; set; }   // 0 if F not yet set
+        public int      LayerIndex       { get; set; }   // 0-based, computed after parse
     }
 }

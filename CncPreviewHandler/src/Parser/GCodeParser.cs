@@ -12,6 +12,7 @@ namespace CncPreviewHandler.Parser
 
         private const int    MaxSegs   = 40000;
         private const double MinMoveMm = 0.1;
+        private const double LayerStepMm = 0.05;   // min Z increase to count as new layer
 
         public List<ToolpathSegment> Parse(string filePath)
         {
@@ -40,12 +41,14 @@ namespace CncPreviewHandler.Parser
                     if (line[0]=='%' || line=="M30" || line=="M2") continue;
                     if (line.StartsWith("EXCLUDE_") || line.StartsWith("SET_") ||
                         line.StartsWith("TUNING_")  || line.StartsWith("PRINT_")) continue;
-                    bool hasMotion = line.IndexOfAny(new[]{'G','X','Y','Z','g','x','y','z'}) >= 0;
+                    bool hasMotion = line.IndexOfAny(new[]{'G','X','Y','Z','F','g','x','y','z','f'}) >= 0;
                     if (hasMotion && stride>1 && (idx%stride)!=0) continue;
                     ProcessLine(line, state, segs);
                 }
                 catch { }
             }
+
+            AssignLayers(segs);
             return segs;
         }
 
@@ -78,9 +81,12 @@ namespace CncPreviewHandler.Parser
             double? y =t.ContainsKey('Y')?(double?)t['Y']:null;
             double? z =t.ContainsKey('Z')?(double?)t['Z']:null;
             double? ii=t.ContainsKey('I')?(double?)t['I']:null;
-            double? jj=t.ContainsKey('J')?(double?)t['J']:null;
+            double? jj=t.ContainsKey('J')?(double?)t['J'] : null;
             double? kk=t.ContainsKey('K')?(double?)t['K']:null;
             double? r =t.ContainsKey('R')?(double?)t['R']:null;
+
+            // Track feedrate (F word)
+            if (t.ContainsKey('F')) st.Feedrate = t['F'];
 
             if (t.ContainsKey('G'))
             {
@@ -109,11 +115,11 @@ namespace CncPreviewHandler.Parser
 
             switch (st.MotionMode)
             {
-                case 0: segs.Add(new ToolpathSegment{From=st.Position,To=tgt,MoveType=MoveType.Rapid}); break;
-                case 1: segs.Add(new ToolpathSegment{From=st.Position,To=tgt,MoveType=MoveType.Cut});   break;
+                case 0: segs.Add(new ToolpathSegment{From=st.Position,To=tgt,MoveType=MoveType.Rapid,FeedrateMmPerMin=st.Feedrate}); break;
+                case 1: segs.Add(new ToolpathSegment{From=st.Position,To=tgt,MoveType=MoveType.Cut,  FeedrateMmPerMin=st.Feedrate}); break;
                 case 2: case 3:
                     segs.AddRange(ArcInterpolator.Expand(st.Position,tgt,ii,jj,kk,r,
-                        clockwise:st.MotionMode==2, plane:st.Plane)); break;
+                        clockwise:st.MotionMode==2, plane:st.Plane, feedrate:st.Feedrate)); break;
             }
             st.Position = tgt;
         }
@@ -124,10 +130,33 @@ namespace CncPreviewHandler.Parser
             var xy = st.ResolveTarget(x, y, st.Position.Z);
             var dz = z.HasValue
                 ? new Vec3(xy.X, xy.Y, st.Units==Units.Inch?z.Value*25.4:z.Value) : xy;
-            segs.Add(new ToolpathSegment{From=st.Position,To=xy, MoveType=MoveType.Rapid});
-            segs.Add(new ToolpathSegment{From=xy,         To=dz, MoveType=MoveType.Cut});
-            segs.Add(new ToolpathSegment{From=dz,         To=xy, MoveType=MoveType.Rapid});
+            double f = st.Feedrate;
+            segs.Add(new ToolpathSegment{From=st.Position,To=xy, MoveType=MoveType.Rapid,FeedrateMmPerMin=f});
+            segs.Add(new ToolpathSegment{From=xy,         To=dz, MoveType=MoveType.Cut,  FeedrateMmPerMin=f});
+            segs.Add(new ToolpathSegment{From=dz,         To=xy, MoveType=MoveType.Rapid,FeedrateMmPerMin=f});
             st.Position = xy;
+        }
+
+        // Assigns LayerIndex to each segment: increments whenever max-Z rises by
+        // LayerStepMm or more above the current high-water mark. For 3D printer
+        // files this gives true layer counts; for CNC files (Z bobs up/down) it
+        // returns 1 because Z never persistently rises.
+        private static void AssignLayers(List<ToolpathSegment> segs)
+        {
+            if (segs.Count == 0) return;
+            int layer = 0;
+            double topZ = segs[0].From.Z;
+            for (int i = 0; i < segs.Count; i++)
+            {
+                var s = segs[i];
+                double z = Math.Max(s.From.Z, s.To.Z);
+                if (z > topZ + LayerStepMm)
+                {
+                    layer++;
+                    topZ = z;
+                }
+                s.LayerIndex = layer;
+            }
         }
     }
 }

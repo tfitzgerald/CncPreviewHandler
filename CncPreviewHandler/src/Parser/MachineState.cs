@@ -10,6 +10,7 @@
         public bool     Absolute   { get; set; } = true;
         public ArcPlane Plane      { get; set; } = ArcPlane.XY;
         public Units    Units      { get; set; } = Units.Metric;
+        public double   Feedrate   { get; set; } = 0;   // mm/min, current F value
 
         public Vec3 ResolveTarget(double? x, double? y, double? z)
         {

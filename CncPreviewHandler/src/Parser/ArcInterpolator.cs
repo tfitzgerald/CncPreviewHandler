@@ -9,7 +9,7 @@ namespace CncPreviewHandler.Parser
 
         public static IEnumerable<ToolpathSegment> Expand(
             Vec3 from, Vec3 to, double? i, double? j, double? k, double? r,
-            bool clockwise, ArcPlane plane)
+            bool clockwise, ArcPlane plane, double feedrate)
         {
             Vec3   center;
             double radius;
@@ -43,7 +43,11 @@ namespace CncPreviewHandler.Parser
             }
             pts[steps] = to;
             for (int n=0; n<steps; n++)
-                yield return new ToolpathSegment { From=pts[n], To=pts[n+1], MoveType=MoveType.Arc };
+                yield return new ToolpathSegment {
+                    From=pts[n], To=pts[n+1],
+                    MoveType=MoveType.Arc,
+                    FeedrateMmPerMin=feedrate
+                };
         }
 
         static void PlaneCoords(Vec3 p, Vec3 c, ArcPlane pl, out double u, out double v)

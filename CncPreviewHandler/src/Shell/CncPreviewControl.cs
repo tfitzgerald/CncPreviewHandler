@@ -18,7 +18,6 @@ namespace CncPreviewHandler.Shell
         public CncPreviewControl(string filePath)
         {
             BackColor = Color.FromArgb(20, 20, 20);
-
             _lbl = new Label
             {
                 Dock      = DockStyle.Fill,
@@ -31,15 +30,12 @@ namespace CncPreviewHandler.Shell
                             : "Parsing toolpath\u2026"
             };
             Controls.Add(_lbl);
-
             if (string.IsNullOrEmpty(filePath))
             {
                 Diag.Warn("CncPreviewControl ctor with empty path");
                 return;
             }
-
-            var _ = Handle; // force handle creation
-
+            var _ = Handle;
             Task.Run(() => ParsePipeline(filePath));
         }
 
@@ -48,11 +44,9 @@ namespace CncPreviewHandler.Shell
             List<ToolpathSegment> segs = null;
             string error = null, dialect = null;
             var t0 = Environment.TickCount;
-
             try
             {
                 Diag.Info($"Parse pipeline start: {filePath}");
-
                 try
                 {
                     var attr = File.GetAttributes(filePath);
@@ -69,7 +63,6 @@ namespace CncPreviewHandler.Shell
                                 "Right-click the file in Explorer and select\r\n" +
                                 "\u201cAlways keep on this device\u201d, then try again.";
                         });
-                        Diag.Warn("Aborting parse: file is cloud-only");
                         return;
                     }
                 }
@@ -88,28 +81,17 @@ namespace CncPreviewHandler.Shell
                 Diag.Error("Parse pipeline threw", ex);
             }
 
-            var capturedSegs    = segs;
-            var capturedDialect = dialect;
-            var capturedError   = error;
-
+            var capSegs = segs; var capDial = dialect; var capErr = error;
             SafeInvoke(() =>
             {
                 try
                 {
-                    if (capturedError != null)
-                    {
-                        _lbl.ForeColor = Color.OrangeRed;
-                        _lbl.Text      = "Error: " + capturedError;
-                        return;
-                    }
-                    if (capturedSegs == null || capturedSegs.Count == 0)
-                    {
-                        _lbl.ForeColor = Color.OrangeRed;
-                        _lbl.Text      = "No toolpath moves found";
-                        return;
-                    }
+                    if (capErr != null)
+                    { _lbl.ForeColor = Color.OrangeRed; _lbl.Text = "Error: " + capErr; return; }
+                    if (capSegs == null || capSegs.Count == 0)
+                    { _lbl.ForeColor = Color.OrangeRed; _lbl.Text = "No toolpath moves found"; return; }
                     Controls.Clear();
-                    var vp = new ToolpathViewport(capturedSegs, filePath, capturedDialect)
+                    var vp = new ToolpathViewport(capSegs, filePath, capDial)
                         { Dock = DockStyle.Fill };
                     Controls.Add(vp);
                     vp.Focus();
@@ -128,23 +110,32 @@ namespace CncPreviewHandler.Shell
 
     sealed class ToolpathViewport : Control
     {
-        // ── Data ────────────────────────────────────────────────────────────
+        // Data
         private readonly List<ToolpathSegment> _segs;
         private readonly string _fileName, _dialect;
         private readonly double _rangeX, _rangeY, _rangeZ;
-        private readonly double _totalTravelMm, _cutTravelMm, _rapidTravelMm;
+        private readonly double _totalTravelMm, _cutTravelMm;
+        private readonly double _estTimeMin;
+        private readonly int _layerCount;
 
-        // ── Camera ──────────────────────────────────────────────────────────
+        // Camera
         private float _cx, _cy, _cz, _bbSize;
         private float _yaw=-45f, _pitch=30f, _zoom=1f, _panX, _panY;
 
-        // ── Mouse ───────────────────────────────────────────────────────────
-        private Point _lastMouse;
-        private Point _cursorPos;
-        private bool  _cursorVisible;
-        private bool  _leftDown, _rightDown;
+        // Mouse
+        private Point _lastMouse, _cursorPos;
+        private bool  _cursorVisible, _leftDown, _rightDown;
 
-        // ── Resources ───────────────────────────────────────────────────────
+        // Layer slider (only created when file is layered)
+        private TrackBar _layerSlider;
+        private int _layerSliderHeight;
+
+        // Progressive render budget
+        private int _renderBudget;
+        private System.Windows.Forms.Timer _progressiveTimer;
+        private const int InitialBudget = 5000;
+
+        // Resources
         private readonly Pen  _rapidPen = new Pen(Color.FromArgb(70,130,220), 1f);
         private readonly Pen  _cutPen   = new Pen(Color.FromArgb(220,90,40),  1f);
         private readonly Pen  _arcPen   = new Pen(Color.FromArgb(60,180,80),  1f);
@@ -164,41 +155,84 @@ namespace CncPreviewHandler.Shell
             SetStyle(ControlStyles.Selectable, true);
             TabStop = true;
 
-            // Bounding box + travel statistics in one pass
+            // Bounding box, travel stats, time estimate, layer count in one pass
             float x0=float.MaxValue,x1=float.MinValue;
             float y0=float.MaxValue,y1=float.MinValue;
             float z0=float.MaxValue,z1=float.MinValue;
-            double totTravel=0, cutTravel=0, rapTravel=0;
-
+            double tot=0, cut=0, mins=0;
+            int maxLayer = 0;
             foreach (var s in segs)
             {
                 Exp(ref x0,ref x1,(float)s.From.X,(float)s.To.X);
                 Exp(ref y0,ref y1,(float)s.From.Y,(float)s.To.Y);
                 Exp(ref z0,ref z1,(float)s.From.Z,(float)s.To.Z);
+                double d = (s.To - s.From).Length;
+                tot += d;
+                if (s.MoveType != MoveType.Rapid) cut += d;
+                double f = s.FeedrateMmPerMin;
+                if (f <= 0) f = (s.MoveType == MoveType.Rapid) ? 6000 : 1500;
+                mins += d / f;
+                if (s.LayerIndex > maxLayer) maxLayer = s.LayerIndex;
+            }
+            _cx=(x0+x1)/2f; _cy=(y0+y1)/2f; _cz=(z0+z1)/2f;
+            _rangeX=x1-x0; _rangeY=y1-y0; _rangeZ=z1-z0;
+            _bbSize=Math.Max((float)_rangeX,Math.Max((float)_rangeY,(float)_rangeZ));
+            if (_bbSize<0.001f) _bbSize=1f;
+            _totalTravelMm = tot;
+            _cutTravelMm   = cut;
+            _estTimeMin    = mins;
+            _layerCount    = maxLayer + 1;
 
-                double dx = s.To.X - s.From.X;
-                double dy = s.To.Y - s.From.Y;
-                double dz = s.To.Z - s.From.Z;
-                double d  = Math.Sqrt(dx*dx + dy*dy + dz*dz);
-                totTravel += d;
-                if (s.MoveType == MoveType.Rapid) rapTravel += d;
-                else                              cutTravel += d;
+            // Layer slider only for genuinely layered files
+            if (_layerCount > 3 && _layerCount < 2000)
+            {
+                _layerSlider = new TrackBar
+                {
+                    Dock          = DockStyle.Bottom,
+                    Minimum       = 0,
+                    Maximum       = _layerCount - 1,
+                    Value         = _layerCount - 1,
+                    Height        = 32,
+                    BackColor     = Color.FromArgb(35, 35, 35),
+                    TickStyle     = TickStyle.None,
+                    AutoSize      = false,
+                    LargeChange   = Math.Max(1, _layerCount / 20),
+                    SmallChange   = 1
+                };
+                _layerSlider.ValueChanged += (s, e) => Invalidate();
+                _layerSliderHeight = _layerSlider.Height;
+                Controls.Add(_layerSlider);
             }
 
-            _cx = (x0+x1)/2f; _cy = (y0+y1)/2f; _cz = (z0+z1)/2f;
-            _rangeX = x1-x0; _rangeY = y1-y0; _rangeZ = z1-z0;
-            _bbSize = Math.Max((float)_rangeX, Math.Max((float)_rangeY, (float)_rangeZ));
-            if (_bbSize < 0.001f) _bbSize = 1f;
+            // Progressive rendering for big files
+            if (_segs.Count > InitialBudget)
+            {
+                _renderBudget = InitialBudget;
+                _progressiveTimer = new System.Windows.Forms.Timer { Interval = 60 };
+                _progressiveTimer.Tick += OnProgressiveTick;
+                _progressiveTimer.Start();
+            }
+            else _renderBudget = _segs.Count;
+        }
 
-            _totalTravelMm = totTravel;
-            _cutTravelMm   = cutTravel;
-            _rapidTravelMm = rapTravel;
+        private void OnProgressiveTick(object sender, EventArgs e)
+        {
+            _renderBudget = Math.Min(_segs.Count, _renderBudget * 2);
+            if (_renderBudget >= _segs.Count)
+            {
+                _progressiveTimer.Stop();
+                _progressiveTimer.Dispose();
+                _progressiveTimer = null;
+            }
+            Invalidate();
         }
 
         static void Exp(ref float lo,ref float hi,float a,float b)
         { if(a<lo)lo=a; if(a>hi)hi=a; if(b<lo)lo=b; if(b>hi)hi=b; }
 
-        // ── Forward projection (world → screen) ─────────────────────────────
+        // Effective drawing height excludes the layer slider strip
+        int DrawHeight => Math.Max(1, Height - _layerSliderHeight);
+
         PointF Proj(double px,double py,double pz)
         {
             double x=px-_cx,y=py-_cy,z=pz-_cz;
@@ -208,46 +242,37 @@ namespace CncPreviewHandler.Shell
             double pr=_pitch*Math.PI/180.0;
             double cp=Math.Cos(pr), sp=Math.Sin(pr);
             double x2=x1, y2=y1*cp-z*sp;
-            float sc=_zoom*Math.Min(Width,Height)*0.75f/_bbSize;
+            int    h = DrawHeight;
+            float  sc=_zoom*Math.Min(Width,h)*0.75f/_bbSize;
             return new PointF(Width/2f+_panX+(float)(x2*sc),
-                              Height/2f+_panY-(float)(y2*sc));
+                              h/2f+_panY-(float)(y2*sc));
         }
 
-        // ── Inverse projection (screen → world, assuming Z = bb-centre) ─────
         bool TryUnproj(PointF screen, out double wx, out double wy, out double wz)
         {
-            wx = wy = wz = 0;
+            wx=wy=wz=0;
             try
             {
-                float sc = _zoom*Math.Min(Width,Height)*0.75f/_bbSize;
+                int    h  = DrawHeight;
+                float  sc = _zoom*Math.Min(Width,h)*0.75f/_bbSize;
                 if (sc < 1e-6f) return false;
-
                 double x2 = (screen.X - Width/2.0  - _panX) / sc;
-                double y2 = -(screen.Y - Height/2.0 - _panY) / sc;
-
+                double y2 = -(screen.Y - h/2.0     - _panY) / sc;
                 double pr = _pitch*Math.PI/180.0;
                 double cp = Math.Cos(pr), sp = Math.Sin(pr);
                 if (Math.Abs(cp) < 1e-6) return false;
-
-                // Assume z(local) = 0 → world z = _cz
-                double zLocal = 0.0;
-                double y1 = (y2 + zLocal*sp) / cp;
+                double y1 = (y2 + 0.0*sp) / cp;
                 double x1 = x2;
-
                 double yr = _yaw*Math.PI/180.0;
                 double cy = Math.Cos(yr), sy = Math.Sin(yr);
-                double x = x1*cy + y1*sy;
-                double y = -x1*sy + y1*cy;
-
-                wx = x + _cx;
-                wy = y + _cy;
+                wx = x1*cy + y1*sy + _cx;
+                wy = -x1*sy + y1*cy + _cy;
                 wz = _cz;
                 return true;
             }
             catch { return false; }
         }
 
-        // ── Paint ───────────────────────────────────────────────────────────
         protected override void OnPaint(PaintEventArgs e)
         {
             try
@@ -255,60 +280,80 @@ namespace CncPreviewHandler.Shell
                 var g = e.Graphics;
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                float w = Width, h = Height;
+                float w = Width, h = DrawHeight;
 
+                int currentLayer = _layerSlider != null ? _layerSlider.Value : int.MaxValue;
+                int budget = (_leftDown || _rightDown) ? _segs.Count : _renderBudget;
+
+                int drawn = 0;
                 foreach (var s in _segs)
                 {
+                    if (drawn >= budget) break;
+                    if (s.LayerIndex > currentLayer) continue;
+
                     var p1 = Proj(s.From.X, s.From.Y, s.From.Z);
                     var p2 = Proj(s.To.X,   s.To.Y,   s.To.Z);
-                    if (p1.X<-50 && p2.X<-50) continue;
-                    if (p1.X>w+50 && p2.X>w+50) continue;
-                    if (p1.Y<-50 && p2.Y<-50) continue;
-                    if (p1.Y>h+50 && p2.Y>h+50) continue;
+                    if (p1.X<-50 && p2.X<-50) { drawn++; continue; }
+                    if (p1.X>w+50 && p2.X>w+50) { drawn++; continue; }
+                    if (p1.Y<-50 && p2.Y<-50) { drawn++; continue; }
+                    if (p1.Y>h+50 && p2.Y>h+50) { drawn++; continue; }
                     var pen = s.MoveType == MoveType.Rapid ? _rapidPen :
                               s.MoveType == MoveType.Arc   ? _arcPen   : _cutPen;
                     g.DrawLine(pen, p1, p2);
+                    drawn++;
                 }
 
-                DrawInfoPanel(g);
+                DrawInfoPanel(g, currentLayer);
                 DrawLegend(g);
                 DrawHints(g);
                 DrawCursorReadout(g);
+                DrawProgressiveBadge(g, budget);
             }
             catch (Exception ex) { Diag.Error("OnPaint failed", ex); }
         }
 
-        void DrawInfoPanel(Graphics g)
+        void DrawInfoPanel(Graphics g, int currentLayer)
         {
             int x = 10, y = 10;
-            var primary   = new SolidBrush(Color.FromArgb(235, 235, 235));
-            var secondary = new SolidBrush(Color.FromArgb(160, 160, 160));
-            try
+            using (var primary   = new SolidBrush(Color.FromArgb(235, 235, 235)))
+            using (var secondary = new SolidBrush(Color.FromArgb(160, 160, 160)))
             {
                 if (!string.IsNullOrEmpty(_fileName))
-                {
-                    g.DrawString(_fileName, _titleFont, primary, x, y);
-                    y += 18;
-                }
+                { g.DrawString(_fileName, _titleFont, primary, x, y); y += 18; }
                 if (!string.IsNullOrEmpty(_dialect))
-                {
-                    g.DrawString(_dialect, _uiFont, secondary, x, y);
-                    y += 14;
-                }
+                { g.DrawString(_dialect, _uiFont, secondary, x, y); y += 14; }
                 g.DrawString(
                     $"Size: {_rangeX:F1} \u00D7 {_rangeY:F1} \u00D7 {_rangeZ:F1} mm",
-                    _uiFont, secondary, x, y);
-                y += 14;
+                    _uiFont, secondary, x, y); y += 14;
                 g.DrawString(
-                    $"{_segs.Count:N0} moves \u00B7 {_totalTravelMm/1000.0:F2} m total \u00B7 {_cutTravelMm/1000.0:F2} m cut",
-                    _uiFont, secondary, x, y);
+                    $"{_segs.Count:N0} moves \u00B7 {_totalTravelMm/1000:F2} m total \u00B7 {_cutTravelMm/1000:F2} m cut",
+                    _uiFont, secondary, x, y); y += 14;
+                g.DrawString(
+                    "Est time: " + FormatTime(_estTimeMin),
+                    _uiFont, secondary, x, y); y += 14;
+
+                if (_layerSlider != null && currentLayer < _layerCount - 1)
+                {
+                    using (var hi = new SolidBrush(Color.FromArgb(255, 200, 0)))
+                        g.DrawString(
+                            $"Showing layer {currentLayer + 1} / {_layerCount}",
+                            _titleFont, hi, x, y);
+                }
             }
-            finally { primary.Dispose(); secondary.Dispose(); }
+        }
+
+        static string FormatTime(double m)
+        {
+            if (m < 1)  return $"{(int)(m*60)} s";
+            if (m < 60) return $"{(int)m} m {(int)((m-(int)m)*60):D2} s";
+            int h = (int)(m / 60);
+            int mm = (int)(m - h*60);
+            return $"{h} h {mm:D2} m";
         }
 
         void DrawLegend(Graphics g)
         {
-            int x = 10, y = Height - 66;
+            int x = 10, y = DrawHeight - 66;
             Sw(g, x, y,      Color.FromArgb(70, 130, 220), "Rapid (G0)");
             Sw(g, x, y + 22, Color.FromArgb(220, 90, 40),  "Cut (G1)");
             Sw(g, x, y + 44, Color.FromArgb(60, 180, 80),  "Arc (G2/G3)");
@@ -324,28 +369,36 @@ namespace CncPreviewHandler.Shell
         {
             string l1 = "drag=orbit  R-drag=pan  scroll=zoom  2\u00D7click=reset";
             string l2 = "[1] top  [2] front  [3] right  [4] left  [5] iso  [6] reset";
-            var rect1 = new RectangleF(0, 10, Width-10, 14);
-            var rect2 = new RectangleF(0, 26, Width-10, 14);
-            g.DrawString(l1, _uiFont, Brushes.DimGray, rect1, _rightAlign);
-            g.DrawString(l2, _uiFont, Brushes.DimGray, rect2, _rightAlign);
+            g.DrawString(l1, _uiFont, Brushes.DimGray,
+                new RectangleF(0, 10, Width-10, 14), _rightAlign);
+            g.DrawString(l2, _uiFont, Brushes.DimGray,
+                new RectangleF(0, 26, Width-10, 14), _rightAlign);
         }
 
         void DrawCursorReadout(Graphics g)
         {
             if (!_cursorVisible) return;
-            if (!TryUnproj(_cursorPos, out double wx, out double wy, out double wz))
-                return;
+            if (_cursorPos.Y >= DrawHeight) return;   // mouse over slider
+            if (!TryUnproj(_cursorPos, out double wx, out double wy, out double wz)) return;
             string txt = $"X {wx,8:F2}   Y {wy,8:F2}   Z {wz,8:F2}";
             var sz = g.MeasureString(txt, _uiFont);
             using (var bg = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
                 g.FillRectangle(bg,
-                    Width - sz.Width - 14, Height - sz.Height - 12,
+                    Width - sz.Width - 14, DrawHeight - sz.Height - 12,
                     sz.Width + 8, sz.Height + 4);
             g.DrawString(txt, _uiFont, Brushes.Silver,
-                Width - sz.Width - 10, Height - sz.Height - 10);
+                Width - sz.Width - 10, DrawHeight - sz.Height - 10);
         }
 
-        // ── Mouse ───────────────────────────────────────────────────────────
+        void DrawProgressiveBadge(Graphics g, int budget)
+        {
+            if (_progressiveTimer == null) return;
+            string txt = $"Refining\u2026 {budget * 100 / Math.Max(1,_segs.Count)}%";
+            var sz = g.MeasureString(txt, _uiFont);
+            g.DrawString(txt, _uiFont, Brushes.DarkGray,
+                Width - sz.Width - 10, DrawHeight - sz.Height - 32);
+        }
+
         protected override void OnMouseEnter(EventArgs e)
         { Focus(); _cursorVisible = true; base.OnMouseEnter(e); }
 
@@ -360,7 +413,6 @@ namespace CncPreviewHandler.Shell
         {
             _cursorPos = e.Location;
             _cursorVisible = true;
-
             if (_leftDown || _rightDown)
             {
                 int dx = e.X - _lastMouse.X, dy = e.Y - _lastMouse.Y;
@@ -390,7 +442,6 @@ namespace CncPreviewHandler.Shell
             base.WndProc(ref m);
         }
 
-        // ── Keyboard view presets ───────────────────────────────────────────
         protected override bool IsInputKey(Keys keyData)
         {
             switch (keyData)
@@ -409,14 +460,14 @@ namespace CncPreviewHandler.Shell
             base.OnKeyDown(e);
             switch (e.KeyCode)
             {
-                case Keys.D1: case Keys.NumPad1: SetView(  0,   0); break; // Top
-                case Keys.D2: case Keys.NumPad2: SetView(  0, -89); break; // Front
-                case Keys.D3: case Keys.NumPad3: SetView(-90, -89); break; // Right
-                case Keys.D4: case Keys.NumPad4: SetView( 90, -89); break; // Left
-                case Keys.D5: case Keys.NumPad5: SetView(-45,  30); break; // Iso
+                case Keys.D1: case Keys.NumPad1: SetView(  0,   0); break;
+                case Keys.D2: case Keys.NumPad2: SetView(  0, -89); break;
+                case Keys.D3: case Keys.NumPad3: SetView(-90, -89); break;
+                case Keys.D4: case Keys.NumPad4: SetView( 90, -89); break;
+                case Keys.D5: case Keys.NumPad5: SetView(-45,  30); break;
                 case Keys.D6: case Keys.NumPad6:
                     _yaw=-45f; _pitch=30f; _zoom=1f; _panX=0f; _panY=0f;
-                    Invalidate(); break;                                   // Reset
+                    Invalidate(); break;
                 default: return;
             }
             e.Handled = true;
@@ -434,6 +485,7 @@ namespace CncPreviewHandler.Shell
                 _rapidPen.Dispose(); _cutPen.Dispose();
                 _arcPen.Dispose();   _uiFont.Dispose();
                 _titleFont.Dispose(); _rightAlign.Dispose();
+                if (_progressiveTimer != null) { _progressiveTimer.Dispose(); _progressiveTimer = null; }
             }
             base.Dispose(d);
         }
